@@ -64,9 +64,9 @@ def allowed_targets(state: LifecycleState, context: TransitionContext) -> frozen
         targets.discard(LifecycleState.UNCHANGED_BLOCKED)
         if state is LifecycleState.DISCOVERED:
             targets.discard(LifecycleState.CLASSIFIED)
-        if state is LifecycleState.DISCOVERED and not context.staging_exists:
+        if state is LifecycleState.DISCOVERED:
             targets.discard(LifecycleState.AUDITED)
-        if state is LifecycleState.AUDITED and not context.staging_exists:
+        if state is LifecycleState.AUDITED:
             targets.discard(LifecycleState.CLASSIFIED)
 
     if LifecycleState.STAGED in targets and not context.authorized_to_modify:

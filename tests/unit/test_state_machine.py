@@ -138,6 +138,15 @@ def test_mutating_flows_cannot_bypass_staging_through_audit(intent: Intent) -> N
         transition(AUDITED, CLASSIFIED, context)
 
 
+@pytest.mark.parametrize("intent", [Intent.CREATE, Intent.MODIFY, Intent.FIX])
+def test_mutating_flows_cannot_bypass_staging_when_staging_exists(intent: Intent) -> None:
+    context = TransitionContext(intent, True, False, True)
+    with pytest.raises(InvalidTransition):
+        transition(DISCOVERED, AUDITED, context)
+    with pytest.raises(InvalidTransition):
+        transition(AUDITED, CLASSIFIED, context)
+
+
 @pytest.mark.parametrize("intent", [Intent.AUDIT_ONLY, Intent.AUDIT_OPTIMIZE])
 def test_findings_cannot_finish_as_unchanged_validated(intent: Intent) -> None:
     context = TransitionContext(intent, False, True, False, 0, 0, 0)
