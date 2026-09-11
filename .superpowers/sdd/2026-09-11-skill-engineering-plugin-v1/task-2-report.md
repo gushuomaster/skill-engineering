@@ -46,3 +46,10 @@ The schemas now require root causes for all existing-source defect classes, use 
 ### Fix commit
 
 `fix: tighten frozen contract invariants`
+
+## Fix Round 2
+
+- RED: `python -m pytest tests/unit/test_contracts.py -q` → `1 failed, 25 passed` for unknown `control_gaps`.
+- GREEN: restored the complete `ControlGap` enum; `python -m pytest tests/unit/test_contracts.py -q` → `26 passed`.
+- Regression: `python -m pytest tests/unit/test_plugin_scaffold.py -q` → `2 passed`; `python -m pytest -q` → `28 passed`.
+- `git diff --check` → clean; UTF-8 no-BOM byte check passed.

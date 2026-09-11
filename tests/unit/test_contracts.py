@@ -40,3 +40,6 @@ def test_gate_rejects_ready_to_publish_fail() -> None:
 @pytest.mark.parametrize("fixture_name", ["check_result_skip_empty_reason.json", "check_result_bad_stage.json"])
 def test_check_result_requires_reason_and_known_stage(fixture_name: str) -> None:
     with pytest.raises(ValidationError): validate_contract("check-result", load_fixture(fixture_name))
+
+def test_decision_rejects_unknown_control_gap() -> None:
+    with pytest.raises(ValidationError): validate_contract("decision-record", load_fixture("decision_unknown_control_gap.json"))
