@@ -62,11 +62,12 @@ def allowed_targets(state: LifecycleState, context: TransitionContext) -> frozen
         if context.intent is not Intent.AUDIT_OPTIMIZE or context.modification_needed:
             targets.discard(LifecycleState.UNCHANGED_VALIDATED)
         targets.discard(LifecycleState.UNCHANGED_BLOCKED)
-        if state is LifecycleState.DISCOVERED:
+        staging_first = context.intent in {Intent.CREATE, Intent.MODIFY, Intent.FIX}
+        if staging_first and state is LifecycleState.DISCOVERED:
             targets.discard(LifecycleState.CLASSIFIED)
-        if state is LifecycleState.DISCOVERED:
+        if staging_first and state is LifecycleState.DISCOVERED:
             targets.discard(LifecycleState.AUDITED)
-        if state is LifecycleState.AUDITED:
+        if staging_first and state is LifecycleState.AUDITED:
             targets.discard(LifecycleState.CLASSIFIED)
 
     if LifecycleState.STAGED in targets and not context.authorized_to_modify:

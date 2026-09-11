@@ -42,6 +42,29 @@ def test_audit_only_defect_returns_to_audit_without_staging() -> None:
     assert transition(MECHANISM_SELECTED, AUDITED, context) is AUDITED
 
 
+def test_audit_optimize_can_audit_and_classify_before_staging() -> None:
+    audit_context = TransitionContext(
+        Intent.AUDIT_OPTIMIZE,
+        True,
+        False,
+        False,
+    )
+    assert transition(DISCOVERED, AUDITED, audit_context) is AUDITED
+    assert transition(AUDITED, CLASSIFIED, audit_context) is CLASSIFIED
+    with pytest.raises(InvalidTransition):
+        transition(DISCOVERED, STAGED, audit_context)
+
+    staging_context = TransitionContext(
+        Intent.AUDIT_OPTIMIZE,
+        True,
+        True,
+        True,
+        modification_needed=True,
+    )
+    assert transition(CLASSIFIED, MECHANISM_SELECTED, staging_context) is MECHANISM_SELECTED
+    assert transition(MECHANISM_SELECTED, STAGED, staging_context) is STAGED
+
+
 @pytest.mark.parametrize("target", [CLASSIFIED, MECHANISM_SELECTED, STAGED, AUDITED, VALIDATED])
 def test_gate_failure_can_return_to_responsible_stage(target: LifecycleState) -> None:
     context = TransitionContext(Intent.FIX, True, True, True)
