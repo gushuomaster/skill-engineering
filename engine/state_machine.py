@@ -13,6 +13,8 @@ class TransitionContext:
     remediation_cycle: int = 0
     audit_cycle: int | None = None
     validation_cycle: int | None = None
+    last_failed_cycle: int | None = None
+    modification_needed: bool = False
 
 
 class InvalidTransition(ValueError):
@@ -50,8 +52,6 @@ def allowed_targets(state: LifecycleState, context: TransitionContext) -> frozen
     if read_only:
         targets.discard(LifecycleState.STAGED)
         targets.discard(LifecycleState.PUBLISHED)
-        if state is LifecycleState.DISCOVERED:
-            targets.intersection_update({LifecycleState.AUDITED})
         if state is LifecycleState.GATE_PASSED:
             targets.intersection_update({LifecycleState.UNCHANGED_VALIDATED})
         if state is LifecycleState.GATE_FAILED:
@@ -59,8 +59,14 @@ def allowed_targets(state: LifecycleState, context: TransitionContext) -> frozen
                                           LifecycleState.CLASSIFIED, LifecycleState.MECHANISM_SELECTED,
                                           LifecycleState.VALIDATED})
     else:
-        targets.discard(LifecycleState.UNCHANGED_VALIDATED)
+        if context.intent is not Intent.AUDIT_OPTIMIZE or context.modification_needed:
+            targets.discard(LifecycleState.UNCHANGED_VALIDATED)
         targets.discard(LifecycleState.UNCHANGED_BLOCKED)
+        if state is LifecycleState.DISCOVERED:
+            targets.discard(LifecycleState.CLASSIFIED)
+
+    if LifecycleState.STAGED in targets and not context.authorized_to_modify:
+        targets.discard(LifecycleState.STAGED)
 
     if state is LifecycleState.DISCOVERED and context.intent is Intent.AUDIT_OPTIMIZE:
         targets.discard(LifecycleState.STAGED)
@@ -72,17 +78,29 @@ def allowed_targets(state: LifecycleState, context: TransitionContext) -> frozen
             context.audit_cycle is not None
             and context.validation_cycle is not None
             and context.audit_cycle == context.validation_cycle == context.remediation_cycle
+            and (
+                context.last_failed_cycle is None
+                or context.remediation_cycle > context.last_failed_cycle
+            )
         )
         if not cycles_are_fresh:
             targets.discard(LifecycleState.GATE_PASSED)
             targets.discard(LifecycleState.GATE_FAILED)
-        if not context.staging_exists and not read_only:
+        if not context.staging_exists and not read_only and (
+            context.modification_needed or context.intent in {Intent.CREATE, Intent.MODIFY, Intent.FIX}
+        ):
             targets.discard(LifecycleState.GATE_PASSED)
             targets.discard(LifecycleState.GATE_FAILED)
+    if state is LifecycleState.GATE_PASSED and context.intent is not Intent.AUDIT_ONLY and context.modification_needed:
+        targets.discard(LifecycleState.UNCHANGED_VALIDATED)
     if state is LifecycleState.GATE_PASSED and (
         not context.authorized_to_modify or not context.staging_exists
     ):
         targets.discard(LifecycleState.PUBLISHED)
+    if state is LifecycleState.GATE_FAILED and (
+        context.intent is not Intent.AUDIT_ONLY or context.authorized_to_modify
+    ):
+        targets.discard(LifecycleState.UNCHANGED_BLOCKED)
     return frozenset(targets)
 
 
