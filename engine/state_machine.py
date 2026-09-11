@@ -64,6 +64,10 @@ def allowed_targets(state: LifecycleState, context: TransitionContext) -> frozen
         targets.discard(LifecycleState.UNCHANGED_BLOCKED)
         if state is LifecycleState.DISCOVERED:
             targets.discard(LifecycleState.CLASSIFIED)
+        if state is LifecycleState.DISCOVERED and not context.staging_exists:
+            targets.discard(LifecycleState.AUDITED)
+        if state is LifecycleState.AUDITED and not context.staging_exists:
+            targets.discard(LifecycleState.CLASSIFIED)
 
     if LifecycleState.STAGED in targets and not context.authorized_to_modify:
         targets.discard(LifecycleState.STAGED)
@@ -91,7 +95,9 @@ def allowed_targets(state: LifecycleState, context: TransitionContext) -> frozen
         ):
             targets.discard(LifecycleState.GATE_PASSED)
             targets.discard(LifecycleState.GATE_FAILED)
-    if state is LifecycleState.GATE_PASSED and context.intent is not Intent.AUDIT_ONLY and context.modification_needed:
+    if state is LifecycleState.GATE_PASSED and (
+        context.defect_found or context.modification_needed
+    ):
         targets.discard(LifecycleState.UNCHANGED_VALIDATED)
     if state is LifecycleState.GATE_PASSED and (
         not context.authorized_to_modify or not context.staging_exists

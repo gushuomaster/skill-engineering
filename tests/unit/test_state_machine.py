@@ -129,6 +129,42 @@ def test_same_failed_cycle_cannot_reenter_gate() -> None:
         transition(VALIDATED, GATE_PASSED, context)
 
 
+@pytest.mark.parametrize("intent", [Intent.CREATE, Intent.MODIFY, Intent.FIX])
+def test_mutating_flows_cannot_bypass_staging_through_audit(intent: Intent) -> None:
+    context = TransitionContext(intent, True, False, False)
+    with pytest.raises(InvalidTransition):
+        transition(DISCOVERED, AUDITED, context)
+    with pytest.raises(InvalidTransition):
+        transition(AUDITED, CLASSIFIED, context)
+
+
+@pytest.mark.parametrize("intent", [Intent.AUDIT_ONLY, Intent.AUDIT_OPTIMIZE])
+def test_findings_cannot_finish_as_unchanged_validated(intent: Intent) -> None:
+    context = TransitionContext(intent, False, True, False, 0, 0, 0)
+    with pytest.raises(InvalidTransition):
+        transition(GATE_PASSED, UNCHANGED_VALIDATED, context)
+
+
+def test_audit_only_modification_needed_cannot_finish_unchanged() -> None:
+    context = TransitionContext(
+        Intent.AUDIT_ONLY, False, False, False, 0, 0, 0, modification_needed=True
+    )
+    with pytest.raises(InvalidTransition):
+        transition(GATE_PASSED, UNCHANGED_VALIDATED, context)
+
+
+def test_unauthorized_audit_optimize_cannot_stage_after_audit() -> None:
+    context = TransitionContext(Intent.AUDIT_OPTIMIZE, False, False, True)
+    with pytest.raises(InvalidTransition):
+        transition(AUDITED, STAGED, context)
+
+
+def test_authorized_audit_only_cannot_block_as_unchanged() -> None:
+    context = TransitionContext(Intent.AUDIT_ONLY, True, True, False)
+    with pytest.raises(InvalidTransition):
+        transition(GATE_FAILED, UNCHANGED_BLOCKED, context)
+
+
 def test_authorized_flow_requires_staging_for_publication() -> None:
     context = TransitionContext(Intent.FIX, True, True, False, 0, 0, 0)
     with pytest.raises(InvalidTransition):
