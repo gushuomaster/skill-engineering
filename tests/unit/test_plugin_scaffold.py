@@ -1,6 +1,9 @@
 import json
 from pathlib import Path
 
+import engine
+import validators
+
 
 def test_plugin_manifest_exposes_only_skill_component():
     manifest_path = Path(__file__).parents[2] / ".codex-plugin" / "plugin.json"
@@ -12,3 +15,8 @@ def test_plugin_manifest_exposes_only_skill_component():
     assert "mcpServers" not in manifest
     assert "apps" not in manifest
     assert "hooks" not in manifest
+
+
+def test_project_packages_are_importable():
+    assert engine is not None
+    assert validators is not None
