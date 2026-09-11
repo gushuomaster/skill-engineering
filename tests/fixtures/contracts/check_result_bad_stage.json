@@ -1,0 +1,1 @@
+{"check_id":"check","source":"internal","subject":"demo","required":true,"status":"PASS","deterministic":true,"reproducible":true,"confidence":1,"evidence":["ok"],"remediation_stage":"BOGUS","artifact_reference":null}

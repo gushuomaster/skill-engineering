@@ -1,1 +1,1 @@
-{"policy_version":"v1","required_checks":["skill.structure"],"blocking_policy_ids":["B01","B02"],"warning_policy_ids":["W01"],"project_extensions":[]}
+{"policy_version":"v1","required_checks":["skill.structure"],"blocking_policy_ids":["B01","B02","B03","B04","B05","B06","B07","B08","B09","B10","B11","B12"],"warning_policy_ids":["W01"],"project_extensions":[]}

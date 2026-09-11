@@ -1,0 +1,1 @@
+{"check_id":"check","source":"internal","subject":"demo","required":false,"status":"SKIP","deterministic":true,"reproducible":true,"confidence":0,"evidence":[],"remediation_stage":"VALIDATED","artifact_reference":null}

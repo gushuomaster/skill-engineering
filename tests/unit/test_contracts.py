@@ -30,3 +30,13 @@ def test_audit_pass_is_not_publish_authorized() -> None:
     assert payload["verdict"] == "PASS"
     assert payload["publish_authorized"] is False
     assert payload["outcome"] == "UNCHANGED_VALIDATED"
+
+def test_modify_defect_decision_requires_root_cause() -> None:
+    with pytest.raises(ValidationError): validate_contract("decision-record", load_fixture("decision_modify_defect_missing_root_cause.json"))
+
+def test_gate_rejects_ready_to_publish_fail() -> None:
+    with pytest.raises(ValidationError): validate_contract("gate-result", load_fixture("gate_ready_fail.json"))
+
+@pytest.mark.parametrize("fixture_name", ["check_result_skip_empty_reason.json", "check_result_bad_stage.json"])
+def test_check_result_requires_reason_and_known_stage(fixture_name: str) -> None:
+    with pytest.raises(ValidationError): validate_contract("check-result", load_fixture(fixture_name))
