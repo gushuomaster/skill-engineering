@@ -48,17 +48,27 @@ def _requires_root_cause(record: DecisionRecord) -> bool:
 
 def validate_classification(record: DecisionRecord) -> None:
     """Ensure a diagnostic record retains the frozen classification semantics."""
+    if not isinstance(record.intent, Intent):
+        raise InvalidDecisionRecord("intent must be an Intent")
+    if not isinstance(record.primary_issue_class, PrimaryIssueClass):
+        raise InvalidDecisionRecord("primary issue class must be a PrimaryIssueClass")
+    if not isinstance(record.regression_disposition, RegressionDisposition):
+        raise InvalidDecisionRecord(
+            "regression disposition must be a RegressionDisposition"
+        )
     if not record.control_gaps:
         raise InvalidDecisionRecord("control gaps must record a classification dimension")
+    if any(not isinstance(control_gap, ControlGap) for control_gap in record.control_gaps):
+        raise InvalidDecisionRecord("each control gap must be a ControlGap")
     if ControlGap.NONE in record.control_gaps and len(record.control_gaps) != 1:
         raise InvalidDecisionRecord("NONE cannot be combined with another control gap")
-    if not isinstance(record.regression_disposition, RegressionDisposition):
-        raise InvalidDecisionRecord("regression disposition must be classified independently")
     if _requires_root_cause(record) and not _non_empty(record.root_cause):
         raise InvalidDecisionRecord("a root cause is required for this defect flow")
     if record.primary_issue_class is PrimaryIssueClass.INSUFFICIENT_EVIDENCE:
         if not record.evidence_limitations:
             raise InvalidDecisionRecord("INSUFFICIENT_EVIDENCE requires an evidence limitation")
+        if any(not _non_empty(limitation) for limitation in record.evidence_limitations):
+            raise InvalidDecisionRecord("each evidence limitation must be nonblank")
         if record.root_cause is not None:
             raise InvalidDecisionRecord("INSUFFICIENT_EVIDENCE cannot fabricate a root cause")
     if record.primary_issue_class is PrimaryIssueClass.TASK_LOCAL_PREFERENCE:

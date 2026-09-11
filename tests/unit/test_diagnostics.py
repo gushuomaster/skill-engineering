@@ -102,6 +102,37 @@ def test_insufficient_evidence_requires_a_recorded_limitation() -> None:
         )
 
 
+def test_insufficient_evidence_rejects_blank_limitation() -> None:
+    with pytest.raises(InvalidDecisionRecord, match="evidence limitation"):
+        validate_classification(
+            decision(
+                primary=PrimaryIssueClass.INSUFFICIENT_EVIDENCE,
+                evidence_limitations=("   ",),
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("intent", "FIX"),
+        ("primary_issue_class", "IMPLEMENTATION_DEFECT"),
+        ("regression_disposition", "REQUIRED"),
+    ],
+)
+def test_classification_rejects_string_enum_bypass(field: str, value: str) -> None:
+    record = decision(intent=Intent.FIX, root_cause="The parser is wrong.")
+    record = DecisionRecord(**{**record.__dict__, field: value})
+    with pytest.raises(InvalidDecisionRecord, match=field.replace("_", " ")):
+        validate_classification(record)
+
+
+def test_classification_rejects_string_control_gap_bypass() -> None:
+    record = decision(control_gaps=("IMPLEMENTATION_GAP",))
+    with pytest.raises(InvalidDecisionRecord, match="control gap"):
+        validate_classification(record)
+
+
 def test_task_local_preference_cannot_contain_persistent_mechanisms() -> None:
     with pytest.raises(InvalidDecisionRecord, match="TASK_LOCAL_PREFERENCE"):
         validate_classification(
