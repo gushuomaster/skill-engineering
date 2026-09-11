@@ -1,0 +1,1 @@
+{"provider_id":"provider-a","capability":"AUDIT_SKILL","provider_status":"AVAILABLE","findings":["missing reference"],"candidate_changes":[],"evidence":["provider report"],"limitations":[],"fallback_used":false}

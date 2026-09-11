@@ -1,0 +1,1 @@
+{"case_id":"encoding-utf8","failure_family":"ENVIRONMENT_COMPATIBILITY","description":"Preserves UTF-8 text.","observable_contract":"UTF-8 output remains readable.","required":true,"fixtures":["fixtures/chinese.txt"]}

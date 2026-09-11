@@ -1,0 +1,1 @@
+{"policy_version":"v1","required_checks":["skill.structure"],"blocking_policy_ids":["B01","B02"],"warning_policy_ids":["W01"],"project_extensions":[]}

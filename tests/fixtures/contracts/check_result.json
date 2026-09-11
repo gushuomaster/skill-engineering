@@ -1,0 +1,1 @@
+{"check_id":"skill.structure","source":"internal","subject":"demo","required":true,"status":"PASS","deterministic":true,"reproducible":true,"confidence":1.0,"evidence":["structure valid"],"remediation_stage":"VALIDATED","artifact_reference":null}

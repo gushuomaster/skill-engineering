@@ -1,0 +1,1 @@
+{"intent":"CREATE","artifact_root":"staging/demo","skill_name":"demo","source_revision":null,"source_digest":null,"files":["SKILL.md"],"executable_assets":[],"required_references":[],"test_inventory":["tests/unit/test_demo.py"],"content_digest":"sha256:create"}

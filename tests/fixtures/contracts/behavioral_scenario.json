@@ -1,0 +1,1 @@
+{"scenario_id":"skill-routing","task":"Route a valid request.","expected_behavior":"Uses the intended skill.","required":false,"inputs":["request"],"limitations":[]}
