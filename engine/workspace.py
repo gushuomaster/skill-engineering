@@ -29,6 +29,16 @@ def _allocate_staging(target_parent: Path) -> Path:
     return staging
 
 
+def _assert_target_parent_outside_source(source: Path, target_parent: Path) -> None:
+    resolved_source = source.resolve(strict=False)
+    resolved_target = target_parent.resolve(strict=False)
+    try:
+        resolved_target.relative_to(resolved_source)
+    except ValueError:
+        return
+    raise ValueError("target parent must be outside the source Skill")
+
+
 @dataclass
 class WorkspaceSession:
     intent: Intent
@@ -56,6 +66,8 @@ class WorkspaceSession:
             return
         if self.staging is not None:
             raise RuntimeError("workspace has already been prepared")
+        if self.source is not None:
+            _assert_target_parent_outside_source(self.source, target_parent)
         staging = _allocate_staging(target_parent)
         if self.intent in (Intent.MODIFY, Intent.FIX):
             if self.source is None:
@@ -84,6 +96,7 @@ class WorkspaceSession:
         if self.source is None:
             raise ValueError("Audit + Optimize requires a source Skill")
         assert_no_scope_escape(self.source)
+        _assert_target_parent_outside_source(self.source, target_parent)
         staging = _allocate_staging(target_parent)
         shutil.copytree(self.source, staging, dirs_exist_ok=True)
         assert_no_scope_escape(staging)

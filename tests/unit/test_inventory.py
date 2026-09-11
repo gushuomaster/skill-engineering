@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import engine.inventory as inventory
 from engine.inventory import assert_no_scope_escape, build_artifact_manifest, digest_tree
 from engine.models import Intent
 
@@ -79,7 +80,7 @@ def test_scope_escape_rejects_symlink_to_outside_root(tmp_path: Path) -> None:
     except OSError as error:
         pytest.skip(f"symlinks unavailable: {error}")
 
-    with pytest.raises(ValueError, match="escapes"):
+    with pytest.raises(ValueError, match="link or reparse point"):
         assert_no_scope_escape(tmp_path)
 
 
@@ -95,3 +96,18 @@ def test_scope_escape_rejects_root_symlink(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="root"):
         assert_no_scope_escape(link)
+
+
+def test_scope_escape_rejects_internal_reparse_point_without_symlink_privilege(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    internal_file = tmp_path / "internal-link.txt"
+    internal_file.write_text("# Internal", encoding="utf-8")
+    monkeypatch.setattr(
+        inventory,
+        "_is_reparse_point",
+        lambda path: path == internal_file,
+    )
+
+    with pytest.raises(ValueError, match="link or reparse point"):
+        assert_no_scope_escape(tmp_path)

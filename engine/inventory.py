@@ -20,27 +20,19 @@ def _is_reparse_point(path: Path) -> bool:
         return False
 
 
-def _is_within(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return False
-    return True
-
-
 def assert_no_scope_escape(root: Path) -> None:
     """Reject links below *root* that resolve outside the artifact scope."""
     if not root.exists() or not root.is_dir():
         raise ValueError(f"artifact root must be an existing directory: {root}")
     if root.is_symlink() or _is_reparse_point(root):
         raise ValueError(f"artifact root cannot be a link or reparse point: {root}")
-    resolved_root = root.resolve(strict=False)
 
     for path in root.rglob("*"):
-        if not (path.is_symlink() or _is_reparse_point(path)):
+        is_symlink = path.is_symlink()
+        is_reparse = _is_reparse_point(path)
+        if not (is_symlink or is_reparse):
             continue
-        if not _is_within(path.resolve(strict=False), resolved_root):
-            raise ValueError(f"path escapes artifact scope: {path}")
+        raise ValueError(f"path cannot be a link or reparse point: {path}")
 
 
 def _inventory_files(root: Path) -> tuple[Path, ...]:
