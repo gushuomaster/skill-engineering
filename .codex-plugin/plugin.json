@@ -1,0 +1,18 @@
+{
+  "name": "skill-engineering",
+  "version": "0.1.0",
+  "description": "Governed creation, repair, audit, validation, and release of Codex Skills.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Skill Engineering",
+    "shortDescription": "Engineer and validate maintainable Skills.",
+    "longDescription": "Applies root-cause analysis, mechanism selection, rule governance, regression checks, and an internal quality gate to complete Skills.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": ["Write"],
+    "defaultPrompt": "Create, repair, or audit this Skill through the engineering quality gate."
+  }
+}
