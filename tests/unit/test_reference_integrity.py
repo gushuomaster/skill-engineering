@@ -36,9 +36,32 @@ def test_manifest_required_reference_is_checked_even_without_link(tmp_path: Path
 
 
 def test_reference_escaping_artifact_root_is_not_verified(tmp_path: Path) -> None:
-    outside = tmp_path.parent / "outside.md"
-    outside.write_text("outside", encoding="utf-8")
+    (tmp_path / "outside.md").write_text("inside", encoding="utf-8")
     (tmp_path / "SKILL.md").write_text("---\nname: demo\ndescription: x\n---\n[bad](../outside.md)\n", encoding="utf-8")
     manifest = build_artifact_manifest(tmp_path, Intent.CREATE, None)
     result = _check(validate_references(manifest), "reference.optional.exists")
     assert result.status is CheckStatus.WARN
+    assert "escapes artifact root" in result.evidence[0]
+
+
+def test_relative_link_is_classified_by_resolved_artifact_path(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "references").mkdir()
+    (tmp_path / "SKILL.md").write_text("---\nname: demo\ndescription: x\n---\n[guide](docs/guide.md)\n", encoding="utf-8")
+    (tmp_path / "docs" / "guide.md").write_text("[runtime](../references/runtime.md)\n", encoding="utf-8")
+    (tmp_path / "references" / "runtime.md").write_text("runtime", encoding="utf-8")
+    manifest = replace(build_artifact_manifest(tmp_path, Intent.CREATE, None), required_references=("references/runtime.md",))
+    results = validate_references(manifest)
+    required = [result for result in results if result.check_id == "reference.required.exists"]
+    assert len(required) == 1
+    assert required[0].status is CheckStatus.PASS
+    assert not any(result.check_id == "reference.optional.exists" and "references/runtime.md" in result.subject for result in results)
+
+
+def test_frontmatter_critical_asset_link_is_required(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "runtime.md").write_text("runtime", encoding="utf-8")
+    (tmp_path / "SKILL.md").write_text("---\nname: demo\ndescription: x\ncritical_assets:\n  - docs/runtime.md\n---\n[runtime](docs/runtime.md)\n", encoding="utf-8")
+    manifest = build_artifact_manifest(tmp_path, Intent.CREATE, None)
+    result = _check(validate_references(manifest), "reference.required.exists")
+    assert result.status is CheckStatus.PASS
