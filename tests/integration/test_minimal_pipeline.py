@@ -113,6 +113,7 @@ def test_audit_optimize_needed_change_stages_and_can_publish(tmp_path: Path) -> 
             source,
             intent=Intent.AUDIT_OPTIMIZE,
             requirement="audit and optimize this capability",
+            failure_evidence=("the current capability misses a required behavior",),
             authorized_to_modify=True,
             target_parent=tmp_path,
         )
@@ -121,6 +122,24 @@ def test_audit_optimize_needed_change_stages_and_can_publish(tmp_path: Path) -> 
     assert LifecycleState.STAGED in trace
     assert outcome.gate_result.publish_authorized is True
     assert outcome.artifact_path != source
+
+
+def test_audit_optimize_without_evidence_remains_read_only(tmp_path: Path) -> None:
+    source = FIXTURES / "minimal-valid"
+    outcome = PipelineOrchestrator().run(
+        request(
+            source,
+            intent=Intent.AUDIT_OPTIMIZE,
+            requirement="audit and optimize this capability",
+            authorized_to_modify=True,
+            target_parent=tmp_path,
+        )
+    )
+
+    assert outcome.outcome_type == "Validated Complete Skill"
+    assert outcome.artifact_path == source
+    assert outcome.gate_result.publish_authorized is False
+    assert not list(tmp_path.glob(".skill-engineering-*"))
 
 
 def test_fix_defect_without_regression_runner_is_blocked(tmp_path: Path) -> None:

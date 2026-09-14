@@ -130,10 +130,7 @@ class PipelineOrchestrator:
                                _context(intent, request, staging_exists=False))
 
         effective_policy = load_gate_policy(request.project_policy)
-        optimization_needed = intent is Intent.AUDIT_OPTIMIZE and (
-            bool(request.failure_evidence)
-            or decision.primary_issue_class is PrimaryIssueClass.CAPABILITY_INVARIANT_CHANGE
-        )
+        optimization_needed = intent is Intent.AUDIT_OPTIMIZE and bool(request.failure_evidence)
         gate, state = self._audit_and_gate(
             intent, request, session, artifact, decision, state, effective_policy,
             defer_gate_transition=optimization_needed,
@@ -299,6 +296,8 @@ def _make_decision(intent: Intent, request: EngineeringRequest) -> DecisionRecor
     requirement = request.requirement.lower()
     if intent is Intent.FIX and not request.failure_evidence:
         return DecisionRecord(intent, PrimaryIssueClass.INSUFFICIENT_EVIDENCE, (ControlGap.NONE,), RegressionDisposition.NOT_APPLICABLE, None, ("no failure evidence was supplied",), (), (), None)
+    if intent is Intent.AUDIT_OPTIMIZE and request.failure_evidence:
+        return DecisionRecord(intent, PrimaryIssueClass.CAPABILITY_INVARIANT_CHANGE, (ControlGap.IMPLEMENTATION_GAP,), RegressionDisposition.NOT_APPLICABLE, None, (), (), (), None)
     if request.failure_evidence:
         primary = PrimaryIssueClass.IMPLEMENTATION_DEFECT
         root = "; ".join(request.failure_evidence)
