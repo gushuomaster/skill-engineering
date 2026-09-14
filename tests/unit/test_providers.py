@@ -23,6 +23,15 @@ class StubProvider:
         return self.result
 
 
+@dataclass
+class RaisingProvider:
+    descriptor: ProviderDescriptor
+    error: Exception
+
+    def invoke(self, capability: str, request: dict[str, object]) -> object:
+        raise self.error
+
+
 def provider(provider_id: str = "external", *, source_identity: str | None = "test/source", revision: str | None = "r1", status: ProviderStatus = ProviderStatus.AVAILABLE, result: object | None = None) -> StubProvider:
     descriptor = ProviderDescriptor(provider_id, source_identity, revision, AUDIT_SKILL, status, "test", (), None)
     value = result or ProviderResult(provider_id, AUDIT_SKILL, status, ("finding",), (), ("evidence",), (), False)
@@ -118,3 +127,36 @@ def test_gateway_accepts_explicit_empty_fallback_as_optional() -> None:
     assert result.provider_status is ProviderStatus.UNAVAILABLE
     assert result.fallback_used is False
     assert result.limitations
+
+
+def test_custom_fallback_override_preserves_other_internal_fallbacks() -> None:
+    custom = provider("custom-fallback")
+    result = ProviderGateway(fallbacks={AUDIT_SKILL: custom}).invoke(
+        CREATE_CANDIDATE, {}, formal_run=True,
+    )
+    assert result.provider_id == "internal.create.v1"
+    assert result.fallback_used is True
+
+
+def test_fallback_invoke_error_returns_optional_unavailable_result() -> None:
+    descriptor = ProviderDescriptor(
+        "raising-fallback", "test/source", "r1", AUDIT_SKILL,
+        ProviderStatus.AVAILABLE, "test", (), None,
+    )
+    fallback = RaisingProvider(descriptor, RuntimeError("fallback exploded"))
+    result = ProviderGateway(fallbacks={AUDIT_SKILL: fallback}).invoke(
+        AUDIT_SKILL, {}, formal_run=True,
+    )
+    assert result.provider_status is ProviderStatus.UNAVAILABLE
+    assert result.fallback_used is False
+    assert any("fallback exploded" in limitation for limitation in result.limitations)
+
+
+def test_fallback_normalization_error_returns_optional_unavailable_result() -> None:
+    fallback = provider("invalid-fallback", result={"capability": AUDIT_SKILL})
+    result = ProviderGateway(fallbacks={AUDIT_SKILL: fallback}).invoke(
+        AUDIT_SKILL, {}, formal_run=True,
+    )
+    assert result.provider_status is ProviderStatus.UNAVAILABLE
+    assert result.fallback_used is False
+    assert any("invalid provider result" in limitation for limitation in result.limitations)

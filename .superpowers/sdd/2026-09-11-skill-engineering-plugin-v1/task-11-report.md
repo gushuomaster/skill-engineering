@@ -43,3 +43,17 @@ No Task 12 publication or recovery behavior was added.
 - `engine/rule_bloat.py` now matches the Task9-approved `_DIRECTIVE` definition from `fba2111`; the later Task9 governance changes from `ab39827` remain intact.
 - `python -m pytest tests/unit/test_providers.py tests/integration/test_provider_fallback.py tests/unit/test_rule_bloat.py tests/unit/test_rule_governance.py tests/integration/test_rule_governance_pipeline.py -q` — **36 passed**.
 - `git diff --check` — **clean**.
+
+## Fix Round 2
+
+- Merged caller-supplied `fallbacks` over the complete internal fallback map, so overriding one capability preserves mandatory internal fallbacks for the other capabilities.
+- Guarded configured fallback invocation and result normalization; exceptions now return an optional `UNAVAILABLE` `ProviderResult` carrying the failure as a limitation instead of crashing the gateway.
+- Added unit regressions for fallback-map merging and both fallback failure paths.
+- Preserved the Task9 `rule_bloat` baseline; no changes were made to `engine/rule_bloat.py`.
+
+### Fix Round 2 Verification
+
+- RED: the three new tests failed against the pre-fix gateway (missing defaults and uncaught fallback exceptions).
+- GREEN: `python -m pytest tests/unit/test_providers.py tests/integration/test_provider_fallback.py -q` — **29 passed**.
+- Full suite: `python -m pytest -q` — **256 passed, 2 skipped** (Windows symlink privilege skips).
+- `git diff --check` — **clean**.

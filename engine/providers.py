@@ -197,9 +197,9 @@ class ProviderGateway:
         fallbacks: Mapping[str, ProviderAdapter | None] | None = None,
     ) -> None:
         self._adapters: list[ProviderAdapter] = []
-        self._fallbacks: dict[str, ProviderAdapter | None] = (
-            dict(internal_fallbacks()) if fallbacks is None else dict(fallbacks)
-        )
+        self._fallbacks: dict[str, ProviderAdapter | None] = dict(internal_fallbacks())
+        if fallbacks is not None:
+            self._fallbacks.update(fallbacks)
         for adapter in adapters or ():
             self.register(adapter)
 
@@ -261,7 +261,22 @@ class ProviderGateway:
                 limitations=limitations,
                 fallback_used=False,
             )
-        result = normalize_provider_result(fallback.invoke(capability, request), capability=capability)
+        try:
+            fallback_result = fallback.invoke(capability, request)
+            result = normalize_provider_result(fallback_result, capability=capability)
+        except Exception as exc:
+            fallback_id = getattr(getattr(fallback, "descriptor", None), "provider_id", "configured")
+            limitations = tuple(attempted) + (f"fallback {fallback_id} failed: {exc}",)
+            return ProviderResult(
+                provider_id=f"optional.none.{capability.lower()}",
+                capability=capability,
+                provider_status=ProviderStatus.UNAVAILABLE,
+                findings=(),
+                candidate_changes=(),
+                evidence=(),
+                limitations=limitations,
+                fallback_used=False,
+            )
         if attempted or not result.fallback_used:
             limitations = result.limitations
             if attempted:
