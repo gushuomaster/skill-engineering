@@ -22,6 +22,8 @@ Implemented the internal-only Create, Modify, Fix, Audit Only, and Audit + Optim
 
 `3037269 feat: run minimal skill governance pipeline`
 
+Follow-up correctness fix: `19b3978 fix: return valid staged artifacts for change flows`.
+
 ## Concerns / Deferred Scope
 
 - Candidate generation is intentionally minimal and internal; no Rule Bloat, regression enhancement, Provider, or atomic publication behavior is included.
