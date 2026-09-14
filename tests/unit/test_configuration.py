@@ -27,4 +27,12 @@ def test_provider_configuration_is_separate_and_schema_shaped() -> None:
     assert isinstance(config.get("providers"), list)
     for provider in config["providers"]:
         assert {"provider_id", "capability", "optional", "fallback_provider"}.issubset(provider)
+        assert isinstance(provider.get("compatibility"), dict)
         assert "blocking_policy_ids" not in provider
+
+
+def test_openai_interface_keeps_implicit_invocation_enabled() -> None:
+    config = yaml.safe_load(
+        (ROOT / "skills" / "skill-engineer" / "agents" / "openai.yaml").read_text(encoding="utf-8")
+    )
+    assert config["policy"]["allow_implicit_invocation"] is True

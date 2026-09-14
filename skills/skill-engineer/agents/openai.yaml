@@ -2,3 +2,5 @@ interface:
   display_name: "Skill Engineer"
   short_description: "Create, repair, audit, and validate maintainable Skills."
   default_prompt: "Engineer this Skill through root-cause analysis and the internal quality gate."
+policy:
+  allow_implicit_invocation: true
