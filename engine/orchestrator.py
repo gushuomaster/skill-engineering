@@ -276,7 +276,7 @@ def _detect_intent(request: EngineeringRequest) -> Intent:
         return Intent.CREATE
     if request.failure_evidence or any(token in text for token in ("fix", "repair", "修复", "修理")):
         return Intent.FIX
-    if request.authorized_to_modify and any(token in text for token in ("modify", "change", "update", "改", "修改")):
+    if any(token in text for token in ("modify", "change", "update", "改", "修改")):
         return Intent.MODIFY
     return Intent.AUDIT_ONLY
 
