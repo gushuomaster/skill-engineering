@@ -41,7 +41,7 @@ class RuleFinding:
     limitations: tuple[str, ...] = ()
 
 
-_DIRECTIVE = re.compile(r"^\s*(?:[-*+]\s*)?(?P<mod>must|never|required|shall|should|do not|don't|不得|必须|禁止|应当)\b(?P<body>.*)$", re.I)
+_DIRECTIVE = re.compile(r"^\s*(?:[-*+]\s*|\d+[.)]\s*)?(?P<mod>must|never|required|shall|should|do not|don't|不得|必须|禁止|应当)(?![A-Za-z])(?P<body>.*)$", re.I)
 _MODALITY = {"must": "MUST", "required": "REQUIRED", "shall": "MUST", "never": "NEVER", "do not": "NEVER", "don't": "NEVER", "should": "SHOULD", "不得": "NEVER", "必须": "MUST", "禁止": "NEVER", "应当": "MUST"}
 _ENV = re.compile(r"\b(windows|linux|macos|osx|powershell|bash|cmd|python\s*[23](?:\.\d+)?)\b", re.I)
 _MECHANISM = re.compile(r"\b(schema|validator|validation|test|regression|tooling|implementation|workflow)\b", re.I)

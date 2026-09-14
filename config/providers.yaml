@@ -1,0 +1,33 @@
+providers:
+  - provider_id: openai.skill-creator
+    capability: CREATE_CANDIDATE
+    source_identity: OpenAI/skill-creator
+    revision_or_version: null
+    optional: true
+    availability: false
+    invocation_adapter: unavailable
+    fallback_provider: internal.create.v1
+  - provider_id: mblode.agent-skills-creator
+    capability: AUDIT_SKILL
+    source_identity: mblode/agent-skills
+    revision_or_version: null
+    optional: true
+    availability: false
+    invocation_adapter: unavailable
+    fallback_provider: internal.audit.v1
+  - provider_id: mblode.agents-md
+    capability: GOVERN_AGENT_INSTRUCTIONS
+    source_identity: mblode/agent-skills
+    revision_or_version: null
+    optional: true
+    availability: false
+    invocation_adapter: unavailable
+    fallback_provider: internal.agents-governance.v1
+  - provider_id: validate-skills
+    capability: CHECK_SKILL_CONFORMANCE
+    source_identity: validate-skills/validate-skills
+    revision_or_version: null
+    optional: true
+    availability: false
+    invocation_adapter: unavailable
+    fallback_provider: internal.structure-validator.v1
