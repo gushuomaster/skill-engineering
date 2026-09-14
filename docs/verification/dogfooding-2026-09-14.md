@@ -26,5 +26,5 @@
 - Impact: release metadata did not identify the published product version consistently; immutable `v1.0.0` and `v1.0.1` remain unchanged.
 - Fix mechanism: authoritative Plugin and Python package versions are set to `1.0.2`; a regression test loads both declarations, requires SemVer `X.Y.Z`, and requires equality without hardcoding a Git tag.
 - Regression: `test_plugin_and_package_versions_match`.
-- Fix commit: recorded in the `v1.0.2` release commit.
+- Fix commit: `f298e89`.
 - Release tag: `v1.0.2`.
