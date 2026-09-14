@@ -3,7 +3,7 @@
 Date: 2026-09-14
 OS: Windows
 Python: `Python 3.14.3`
-Revision: `e33764eb9685d5fbcdc734285aa5cfcc076ee4a0`
+Tested revision: `27067d133a6e32e6a550a2236a5bc038f881483b` (HEAD before this documentation-only update)
 
 ## Commands and results
 
