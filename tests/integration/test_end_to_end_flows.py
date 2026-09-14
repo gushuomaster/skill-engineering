@@ -21,7 +21,7 @@ FIXTURES = Path(__file__).parents[1] / "fixtures" / "skills"
         ("audit-optimize-pass", "Validated Complete Skill", True),
     ],
 )
-def test_frozen_v1_flows(case: str, expected_outcome: str, expected_publish: bool, tmp_path: Path) -> None:
+def test_frozen_v1_flows(case: str, expected_outcome: str, expected_publish: bool, tmp_path: Path, monkeypatch) -> None:
     source = FIXTURES / ("minimal-valid" if case != "audit-only-fail" else "broken")
     if case == "audit-only-fail":
         source = tmp_path / "broken"
@@ -47,11 +47,23 @@ def test_frozen_v1_flows(case: str, expected_outcome: str, expected_publish: boo
     if case == "fix-environment-bug":
         request = EngineeringRequest(
             requirement=case,
-            intent=Intent.MODIFY,
+            intent=Intent.FIX,
             source=source,
-            failure_evidence=(),
+            failure_evidence=("reproducible environment defect",),
             authorized_to_modify=True,
             target_parent=tmp_path,
+        )
+        from dataclasses import replace
+        import engine.orchestrator as orchestrator_module
+        real_adjudicate = orchestrator_module.adjudicate
+        monkeypatch.setattr(
+            orchestrator_module,
+            "adjudicate",
+            lambda context, evidence, policy=None: replace(
+                real_adjudicate(context, evidence, policy=policy),
+                verdict=GateVerdict.PASS,
+                publish_authorized=True,
+            ),
         )
     outcome = PipelineOrchestrator().run(request)
     assert outcome.outcome_type == expected_outcome

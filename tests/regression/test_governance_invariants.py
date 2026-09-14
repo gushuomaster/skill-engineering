@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from engine.models import GateOutcome, GateResult, GateVerdict, Intent
+from dataclasses import dataclass
+from engine.models import GateOutcome, GateResult, GateVerdict, Intent, ProviderDescriptor, ProviderResult, ProviderStatus
 from engine.orchestrator import EngineeringRequest, PipelineBlockedError, PipelineOrchestrator
 from engine.workspace import CrossFilesystemPublishError, WorkspaceSession, publish_atomic
 
@@ -19,8 +20,18 @@ def _gate(**overrides):
 
 
 def test_provider_pass_cannot_bypass_gate(tmp_path: Path) -> None:
+    @dataclass
+    class PassingProvider:
+        descriptor: ProviderDescriptor
+        def invoke(self, capability: str, request: dict[str, object]) -> ProviderResult:
+            return ProviderResult("external.audit", capability, ProviderStatus.AVAILABLE, (), (), ("provider PASS",), (), False)
+
+    from engine.providers import AUDIT_SKILL, ProviderGateway
+    provider = PassingProvider(ProviderDescriptor("external.audit", "vendor/audit", "r1", AUDIT_SKILL, ProviderStatus.AVAILABLE, "test", (), None))
     with pytest.raises(PipelineBlockedError):
-        PipelineOrchestrator().run(EngineeringRequest("fix", Intent.FIX, FIXTURE, (), True, tmp_path))
+        PipelineOrchestrator(provider_gateway=ProviderGateway([provider])).run(
+            EngineeringRequest("fix", Intent.FIX, FIXTURE, (), True, tmp_path)
+        )
 
 
 def test_audit_only_never_auto_upgrades(tmp_path: Path) -> None:
