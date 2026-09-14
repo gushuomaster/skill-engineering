@@ -45,16 +45,23 @@ _DIRECTIVE = re.compile(r"^\s*(?:[-*+]\s*|\d+[.)]\s*)?(?P<mod>must|never|require
 _MODALITY = {"must": "MUST", "required": "REQUIRED", "shall": "MUST", "never": "NEVER", "do not": "NEVER", "don't": "NEVER", "should": "SHOULD", "不得": "NEVER", "必须": "MUST", "禁止": "NEVER", "应当": "MUST"}
 _ENV = re.compile(r"\b(windows|linux|macos|osx|powershell|bash|cmd|python\s*[23](?:\.\d+)?)\b", re.I)
 _MECHANISM = re.compile(r"\b(schema|validator|validation|test|regression|tooling|implementation|workflow)\b", re.I)
+_OBSOLETE = re.compile(
+    r"\b(?:legacy|deprecated|obsolete|old|unsupported|sunset|no\s+longer|"
+    r"python\s*[12](?:\.\d+)?|node\s*(?:0|[1-9])|ruby\s*[12]|java\s*[0-8])\b",
+    re.I,
+)
 
 
 def _sources(skill_root: Path) -> list[Path]:
     paths: list[Path] = []
-    for candidate in (skill_root / "SKILL.md", skill_root / "AGENTS.md"):
-        if candidate.is_file():
+    skill_root = skill_root.resolve()
+    skill_file = skill_root / "SKILL.md"
+    if skill_file.is_file():
+        paths.append(skill_file)
+    for ancestor in (skill_root, *skill_root.parents):
+        candidate = ancestor / "AGENTS.md"
+        if candidate.is_file() and candidate not in paths:
             paths.append(candidate)
-    parent = skill_root.parent / "AGENTS.md"
-    if parent.is_file() and parent not in paths:
-        paths.append(parent)
     references = skill_root / "references"
     if references.is_dir():
         for candidate in sorted(references.rglob("*.md")):
@@ -112,8 +119,36 @@ def _tokens(value: str) -> set[str]:
 
 def detect_rule_bloat(units: tuple[RuleUnit, ...], history: RuleHistory | None) -> tuple[RuleFinding, ...]:
     findings: list[RuleFinding] = []
-    def add(fid: str, affected: tuple[str, ...], signals: tuple[str, ...], confidence: float, risk: str, rationale: str, action: GovernanceAction, target: str | None = None, limitations: tuple[str, ...] = ()) -> None:
-        findings.append(RuleFinding(fid, affected, signals, max(0.0, min(1.0, confidence)), risk, rationale, action, target, tuple(next((u.source_location for u in units if u.id == rid), rid) for rid in affected), limitations))
+    def add(
+        fid: str,
+        affected: tuple[str, ...],
+        signals: tuple[str, ...],
+        confidence: float,
+        risk: str,
+        rationale: str,
+        action: GovernanceAction,
+        target: str | None = None,
+        limitations: tuple[str, ...] = (),
+        evidence_refs: tuple[str, ...] = (),
+    ) -> None:
+        refs = evidence_refs or tuple(
+            next((u.source_location for u in units if u.id == rid), rid)
+            for rid in affected
+        )
+        findings.append(
+            RuleFinding(
+                fid,
+                affected,
+                signals,
+                max(0.0, min(1.0, confidence)),
+                risk,
+                rationale,
+                action,
+                target,
+                refs,
+                limitations,
+            )
+        )
 
     seen: dict[str, list[RuleUnit]] = {}
     for unit in units:
@@ -123,14 +158,27 @@ def detect_rule_bloat(units: tuple[RuleUnit, ...], history: RuleHistory | None) 
             add(f"exact-{len(findings)+1}", tuple(u.id for u in group), ("exact_duplicate",), 1.0, "medium", "Rules have identical normalized meaning.", GovernanceAction.MERGE)
     for index, left in enumerate(units):
         for right in units[index + 1:]:
-            if left.normalized_meaning == right.normalized_meaning:
-                continue
             lt, rt = _tokens(left.normalized_meaning), _tokens(right.normalized_meaning)
             score = len(lt & rt) / len(lt | rt) if lt | rt else 0.0
+            modalities = {left.modality, right.modality}
+            if lt & rt and (
+                modalities == {"MUST", "NEVER"}
+                or modalities == {"REQUIRED", "NEVER"}
+            ):
+                add(
+                    f"conflict-{len(findings)+1}",
+                    (left.id, right.id),
+                    ("conflict", "branch_depth"),
+                    min(0.95, score + 0.4),
+                    "high",
+                    "Opposing directives share overlapping meaning.",
+                    GovernanceAction.MOVE,
+                    "validator",
+                )
+            if left.normalized_meaning == right.normalized_meaning:
+                continue
             if score >= 0.6:
                 add(f"similar-{len(findings)+1}", (left.id, right.id), ("semantic_similarity",), score, "low", "Rules are near-duplicates and require human review.", GovernanceAction.MERGE, limitations=("similarity is heuristic",))
-            if lt & rt and {left.modality, right.modality} == {"MUST", "NEVER"}:
-                add(f"conflict-{len(findings)+1}", (left.id, right.id), ("conflict", "branch_depth"), min(0.95, score + 0.4), "high", "Opposing directives share overlapping meaning.", GovernanceAction.MOVE, "validator")
     directive_count = len(units)
     if directive_count >= 8:
         add("pressure", tuple(u.id for u in units), ("directive_pressure",), min(0.99, directive_count / 20), "low", "High directive density is advisory only.", GovernanceAction.MOVE, "validator")
@@ -143,11 +191,22 @@ def detect_rule_bloat(units: tuple[RuleUnit, ...], history: RuleHistory | None) 
     workaround_units = tuple(u.id for u in units if re.search(r"workaround|temporary|hack|until\s+fixed|临时|绕过", u.normalized_meaning, re.I))
     if workaround_units:
         add("workaround", workaround_units, ("case_specific_patch_smell",), 0.75, "medium", "Workaround language suggests a case-specific prompt patch.", GovernanceAction.MOVE, "implementation")
+    obsolete_units = tuple(u.id for u in units if _OBSOLETE.search(u.normalized_meaning))
+    if obsolete_units:
+        add(
+            "obsolete-resource",
+            obsolete_units,
+            ("obsolete_resource",),
+            0.8,
+            "medium",
+            "Rules reference potentially obsolete paths, commands, versions, or resources.",
+            GovernanceAction.DELETE,
+        )
     mechanism_units = tuple(u.id for u in units if u.referenced_mechanism)
     if len(mechanism_units) >= 2:
         add("cross-layer", mechanism_units, ("cross_layer_duplication", "mechanism_substitution"), 0.65, "low", "Rules reference mechanisms that may already enforce the invariant.", GovernanceAction.MERGE)
     if history is None:
-        add("history", (), ("historical_growth",), 0.0, "low", "Git history unavailable; growth check skipped.", GovernanceAction.KEEP, limitations=("missing Git history",))
+        add("history", (), ("historical_growth",), 0.0, "low", "Git history unavailable; growth check skipped.", GovernanceAction.KEEP, limitations=("missing Git history",), evidence_refs=("git-history:unavailable",))
     elif len(history.rule_counts) >= 2 and history.rule_counts[-1] > history.rule_counts[0]:
         add("growth", tuple(u.id for u in units), ("historical_growth",), 0.8, "medium", "Rule count increased across available history.", GovernanceAction.MOVE, "workflow")
     return tuple(findings)
