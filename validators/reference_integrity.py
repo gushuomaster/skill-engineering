@@ -31,22 +31,23 @@ def _resolve(root: Path, source: str, target: str) -> tuple[Path, str | None]:
         return resolved, None
 
 
-def _frontmatter_required_paths(root: Path) -> set[str]:
+def _frontmatter_required_paths(root: Path) -> tuple[set[str], dict[Path, str]]:
     skill_path = root / "SKILL.md"
     try:
         lines = skill_path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError):
-        return set()
+        return set(), {}
     if not lines or lines[0].strip() != "---":
-        return set()
+        return set(), {}
     try:
         end = next(index for index, line in enumerate(lines[1:], 1) if line.strip() == "---")
         frontmatter = yaml.safe_load("\n".join(lines[1:end]))
     except (StopIteration, yaml.YAMLError):
-        return set()
+        return set(), {}
     if not isinstance(frontmatter, dict):
-        return set()
+        return set(), {}
     paths: set[str] = set()
+    out_of_scope: dict[Path, str] = {}
     for key in ("critical_assets", "required_references"):
         values = frontmatter.get(key, ())
         if isinstance(values, str):
@@ -55,10 +56,13 @@ def _frontmatter_required_paths(root: Path) -> set[str]:
             continue
         for value in values:
             if isinstance(value, str):
-                _, relative = _resolve(root, "<manifest>", value.replace("\\", "/"))
+                target = value.replace("\\", "/")
+                resolved, relative = _resolve(root, "<manifest>", target)
                 if relative is not None:
                     paths.add(relative)
-    return paths
+                else:
+                    out_of_scope.setdefault(resolved, target)
+    return paths, out_of_scope
 
 
 def validate_references(manifest: ArtifactManifest) -> tuple[CheckResult, ...]:
@@ -76,14 +80,24 @@ def validate_references(manifest: ArtifactManifest) -> tuple[CheckResult, ...]:
             if not parsed.scheme and not target.startswith("#"):
                 links.append((source, unquote(parsed.path).replace("\\", "/")))
 
-    required_paths = _frontmatter_required_paths(root)
+    required_paths, out_of_scope_required = _frontmatter_required_paths(root)
     for required_reference in manifest.required_references:
-        _, relative = _resolve(root, "<manifest>", required_reference.replace("\\", "/"))
+        target = required_reference.replace("\\", "/")
+        resolved, relative = _resolve(root, "<manifest>", target)
         if relative is not None:
             required_paths.add(relative)
+        else:
+            out_of_scope_required.setdefault(resolved, target)
     linked_paths = {_resolve(root, source, target)[1] for source, target in links}
+    linked_out_of_scope_paths = {
+        resolved for source, target in links
+        if (resolved := _resolve(root, source, target)[0]) in out_of_scope_required
+    }
     for required_reference in sorted(required_paths - linked_paths):
         links.append(("<manifest>", required_reference))
+    for resolved, target in out_of_scope_required.items():
+        if resolved not in linked_out_of_scope_paths:
+            links.append(("<manifest>", target))
     if not links:
         return (_result("reference.integrity", manifest.skill_name, False, CheckStatus.PASS, "no local Markdown references"),)
 
@@ -95,7 +109,11 @@ def validate_references(manifest: ArtifactManifest) -> tuple[CheckResult, ...]:
         if identity in seen:
             continue
         seen.add(identity)
-        is_required = relative in required_paths if relative is not None else False
+        is_required = (
+            relative in required_paths
+            if relative is not None
+            else resolved in out_of_scope_required
+        )
         if relative is not None and relative.startswith("references/"):
             is_required = True
         check_id = "reference.required.exists" if is_required else "reference.optional.exists"

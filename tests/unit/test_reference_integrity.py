@@ -65,3 +65,29 @@ def test_frontmatter_critical_asset_link_is_required(tmp_path: Path) -> None:
     manifest = build_artifact_manifest(tmp_path, Intent.CREATE, None)
     result = _check(validate_references(manifest), "reference.required.exists")
     assert result.status is CheckStatus.PASS
+
+
+def test_out_of_scope_critical_asset_without_link_is_required_failure(tmp_path: Path) -> None:
+    (tmp_path / "SKILL.md").write_text("---\nname: demo\ndescription: x\ncritical_assets: [../outside.md]\n---\n", encoding="utf-8")
+    manifest = build_artifact_manifest(tmp_path, Intent.CREATE, None)
+    results = validate_references(manifest)
+    required = _check(results, "reference.required.exists")
+    assert required.status is CheckStatus.FAIL
+    assert "escapes artifact root" in required.evidence[0]
+    assert not any(result.check_id == "reference.optional.exists" for result in results)
+
+
+def test_out_of_scope_critical_asset_link_is_required_failure(tmp_path: Path) -> None:
+    (tmp_path / "SKILL.md").write_text("---\nname: demo\ndescription: x\ncritical_assets: [../outside.md]\n---\n[asset](../outside.md)\n", encoding="utf-8")
+    manifest = build_artifact_manifest(tmp_path, Intent.CREATE, None)
+    result = _check(validate_references(manifest), "reference.required.exists")
+    assert result.status is CheckStatus.FAIL
+    assert "escapes artifact root" in result.evidence[0]
+
+
+def test_out_of_scope_manifest_required_reference_is_required_failure(tmp_path: Path) -> None:
+    (tmp_path / "SKILL.md").write_text("---\nname: demo\ndescription: x\n---\n", encoding="utf-8")
+    manifest = replace(build_artifact_manifest(tmp_path, Intent.CREATE, None), required_references=("../outside.md",))
+    result = _check(validate_references(manifest), "reference.required.exists")
+    assert result.status is CheckStatus.FAIL
+    assert "escapes artifact root" in result.evidence[0]
