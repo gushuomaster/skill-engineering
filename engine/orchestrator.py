@@ -23,6 +23,8 @@ from engine.quality_gate import GateContext, adjudicate, load_gate_policy
 from engine.state_machine import TransitionContext, transition
 from engine.workspace import WorkspaceSession
 from engine.inventory import build_artifact_manifest
+from engine.rule_bloat import detect_rule_bloat, extract_rule_units
+from engine.rule_governance import governance_evidence, govern_findings
 from validators.reference_integrity import validate_references
 from validators.skill_structure import validate_skill_structure
 
@@ -205,6 +207,10 @@ class PipelineOrchestrator:
             return gate, state
         manifest = build_artifact_manifest(artifact, intent, session.source_digest)
         evidence = validate_skill_structure(manifest) + validate_references(manifest)
+        rule_units = extract_rule_units(artifact)
+        rule_findings = detect_rule_bloat(rule_units, history=None)
+        governance = govern_findings(rule_findings, decision.selected_mechanisms)
+        evidence += governance_evidence(governance)
         if decision.primary_issue_class is PrimaryIssueClass.INSUFFICIENT_EVIDENCE:
             evidence += (_diagnostic_failure(manifest.skill_name),)
         state = self._move(
