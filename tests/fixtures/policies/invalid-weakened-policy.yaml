@@ -1,0 +1,28 @@
+policy_version: project-weakened
+required_checks:
+  - skill.structure.skill_md
+  - skill.structure.frontmatter
+  - skill.structure.name_format
+  - skill.structure.directory_name
+  - skill.structure.placeholders
+  - skill.structure.critical_assets
+  - skill.structure.schema
+  - skill.structure.executables
+blocking_policy_ids:
+  - B01
+  - B02
+  - B03
+  - B04
+  - B05
+  - B06
+  - B07
+  - B08
+  - B09
+  - B10
+  - B11
+  - B12
+warning_policy_ids:
+  - W_RULE_BLOAT
+  - W_OPTIONAL_PROVIDER
+  - W_OPTIONAL_REFERENCE
+project_extensions: []
