@@ -28,6 +28,8 @@ Fix-round correction: Audit + Optimize now defers its final Gate transition whil
 
 Fix-round verification: Task 8 integration tests — **8 passed**; full suite — **202 passed, 2 skipped**.
 
+Fix Round 2: `optimization_needed` now derives only from supplied failure/defect evidence; requirement wording alone keeps Audit + Optimize read-only. The needed-case test supplies evidence, while the no-evidence case asserts no staging and no publication authority. Verification: Task 8 integration tests — **9 passed**; full suite — **203 passed, 2 skipped**.
+
 ## Concerns / Deferred Scope
 
 - Candidate generation is intentionally minimal and internal; no Rule Bloat, regression enhancement, Provider, or atomic publication behavior is included.
