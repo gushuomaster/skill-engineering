@@ -78,6 +78,15 @@ class PipelineOrchestrator:
         staging_allowed = request.authorized_to_modify and intent is not Intent.AUDIT_ONLY
         if intent in {Intent.CREATE, Intent.MODIFY, Intent.FIX} and staging_allowed:
             session.prepare(request.target_parent)
+            if intent in {Intent.MODIFY, Intent.FIX} and session.staging is not None:
+                renamed = session.staging.with_name("staged-skill")
+                session.staging.rename(renamed)
+                session.staging = renamed
+                skill_md = renamed / "SKILL.md"
+                if skill_md.is_file():
+                    text = skill_md.read_text(encoding="utf-8")
+                    text = re.sub(r"(?m)^name:\s*[^\r\n]+", "name: staged-skill", text, count=1)
+                    skill_md.write_text(text, encoding="utf-8")
             state = self._move(
                 LifecycleState.DISCOVERED,
                 LifecycleState.STAGED,
@@ -92,7 +101,7 @@ class PipelineOrchestrator:
                 raise PipelineBlockedError(gate)
             artifact = _write_internal_candidate(session.staging, request.requirement)
         else:
-            artifact = session.source
+            artifact = session.staging if session.staging is not None else session.source
 
         decision = _make_decision(intent, request)
         if state is LifecycleState.DISCOVERED:
