@@ -40,6 +40,7 @@ class EngineeringRequest:
     authorized_to_modify: bool
     target_parent: Path
     project_policy: Path | None = None
+    regression_runner: Callable[[Path], CheckResult] | None = None
 
 
 @dataclass(frozen=True)
@@ -217,8 +218,8 @@ class PipelineOrchestrator:
             return gate, state
         manifest = build_artifact_manifest(artifact, intent, session.source_digest)
         evidence = validate_skill_structure(manifest) + validate_references(manifest)
-        if decision.regression_disposition is RegressionDisposition.REQUIRED and any("environment" in item.lower() for item in request.failure_evidence):
-            evidence += (_regression_pass(manifest.skill_name),)
+        if decision.regression_disposition is RegressionDisposition.REQUIRED and request.regression_runner is not None:
+            evidence += (request.regression_runner(artifact),)
         rule_units = extract_rule_units(artifact)
         rule_findings = detect_rule_bloat(rule_units, history=None)
         governance = govern_findings(rule_findings, decision.selected_mechanisms)
@@ -360,10 +361,6 @@ def _write_internal_candidate(staging: Path, requirement: str) -> Path:
 
 def _diagnostic_failure(subject: str) -> CheckResult:
     return CheckResult("diagnostic.evidence", "internal.diagnostics", subject, True, CheckStatus.FAIL, True, True, 1.0, ("insufficient failure evidence",), LifecycleState.VALIDATED, subject)
-
-
-def _regression_pass(subject: str) -> CheckResult:
-    return CheckResult("B07", "internal.regression", subject, True, CheckStatus.PASS, True, True, 1.0, ("regression coverage recorded",), LifecycleState.VALIDATED, subject)
 
 
 def _blocked_gate(intent: Intent, request: EngineeringRequest, *, decision: DecisionRecord | None = None, policy: dict[str, object] | None = None) -> GateResult:

@@ -52,6 +52,7 @@ def test_frozen_v1_flows(case: str, expected_outcome: str, expected_publish: boo
             failure_evidence=("reproducible environment defect",),
             authorized_to_modify=True,
             target_parent=tmp_path,
+            regression_runner=lambda artifact: __import__('engine.models', fromlist=['CheckResult','CheckStatus','LifecycleState']).CheckResult('B07','internal.regression','environment',True,__import__('engine.models', fromlist=['CheckStatus']).CheckStatus.PASS,True,True,1.0,('runner evidence',),__import__('engine.models', fromlist=['LifecycleState']).LifecycleState.VALIDATED,str(artifact)),
         )
     outcome = PipelineOrchestrator().run(request)
     assert outcome.outcome_type == expected_outcome
