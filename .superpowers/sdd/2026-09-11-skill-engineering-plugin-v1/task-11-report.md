@@ -24,3 +24,16 @@ Provider implementation was recorded in `39f790f` (`feat: add replaceable skill 
 ## Scope
 
 No Task 12 publication or recovery behavior was added.
+
+## Fix Round 1
+
+- Formal Provider runs now require a non-blank `source_identity` and `revision_or_version`; blank or whitespace-only values use the internal fallback.
+- Fallback results set `fallback_used=True` whenever a configured fallback is invoked, while an explicitly empty fallback is represented as an optional unavailable result rather than an exception.
+- The orchestrator can receive a `ProviderGateway`; normalized Provider results are adapted to optional `CheckResult` evidence, collected by `EvidenceCollector`, and evaluated by the Quality Gate. Provider findings and limitations remain advisory warnings and cannot supply a final verdict.
+- Reverted the unrelated Task11 change to `engine/rule_bloat.py`.
+
+### Fix Verification
+
+- `python -m pytest tests/unit/test_providers.py tests/integration/test_provider_fallback.py -q` — **26 passed**.
+- `python -m pytest tests/integration/test_minimal_pipeline.py -q` — **9 passed**.
+- `python -m pytest -q` — **253 passed, 2 skipped** (Windows symlink privilege skips).

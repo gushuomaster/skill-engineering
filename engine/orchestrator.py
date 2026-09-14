@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from engine.diagnostics import validate_classification
+from engine.evidence import EvidenceCollector
 from engine.mechanism_selection import select_mechanisms
 from engine.models import (
     CheckResult,
@@ -20,6 +21,7 @@ from engine.models import (
     RegressionDisposition,
 )
 from engine.quality_gate import GateContext, adjudicate, load_gate_policy
+from engine.providers import AUDIT_SKILL, ProviderGateway, provider_result_to_check_result
 from engine.state_machine import TransitionContext, transition
 from engine.workspace import WorkspaceSession
 from engine.inventory import build_artifact_manifest
@@ -55,9 +57,14 @@ class PipelineBlockedError(RuntimeError):
 
 
 class PipelineOrchestrator:
-    def __init__(self, state_observer: Callable[[LifecycleState], None] | None = None) -> None:
+    def __init__(
+        self,
+        state_observer: Callable[[LifecycleState], None] | None = None,
+        provider_gateway: ProviderGateway | None = None,
+    ) -> None:
         self.state_history: list[LifecycleState] = []
         self._state_observer = state_observer
+        self._provider_gateway = provider_gateway
 
     def _record(self, state: LifecycleState) -> None:
         self.state_history.append(state)
@@ -213,6 +220,22 @@ class PipelineOrchestrator:
         evidence += governance_evidence(governance)
         if decision.primary_issue_class is PrimaryIssueClass.INSUFFICIENT_EVIDENCE:
             evidence += (_diagnostic_failure(manifest.skill_name),)
+        collector = EvidenceCollector()
+        for result in evidence:
+            collector.add(result)
+        if self._provider_gateway is not None:
+            provider_result = self._provider_gateway.invoke(
+                AUDIT_SKILL,
+                {"subject": manifest.skill_name},
+                formal_run=True,
+            )
+            collector.add(
+                provider_result_to_check_result(
+                    provider_result,
+                    subject=manifest.skill_name,
+                )
+            )
+        evidence = collector.snapshot()
         state = self._move(
             state,
             LifecycleState.AUDITED,

@@ -5,7 +5,14 @@ from dataclasses import asdict
 from typing import Iterable, Mapping, Protocol, runtime_checkable
 
 from engine.contracts import validate_contract
-from engine.models import ProviderDescriptor, ProviderResult, ProviderStatus
+from engine.models import (
+    CheckResult,
+    CheckStatus,
+    LifecycleState,
+    ProviderDescriptor,
+    ProviderResult,
+    ProviderStatus,
+)
 
 CREATE_CANDIDATE = "CREATE_CANDIDATE"
 AUDIT_SKILL = "AUDIT_SKILL"
@@ -82,6 +89,42 @@ def normalize_findings(result: ProviderResult | Mapping[str, object]) -> tuple[s
     return tuple(sorted(item.strip() for item in normalized.findings))
 
 
+def provider_result_to_check_result(
+    result: ProviderResult | Mapping[str, object],
+    *,
+    subject: str,
+) -> CheckResult:
+    """Adapt normalized Provider evidence into an optional Gate check."""
+    normalized = normalize_provider_result(result)
+    evidence = list(normalized.evidence)
+    evidence.extend(f"finding: {finding}" for finding in normalized.findings)
+    evidence.extend(f"limitation: {limitation}" for limitation in normalized.limitations)
+    if normalized.fallback_used:
+        evidence.append(f"fallback used: {normalized.provider_id}")
+    if not evidence:
+        evidence.append("provider returned no evidence")
+    status = CheckStatus.PASS
+    if (
+        normalized.provider_status is not ProviderStatus.AVAILABLE
+        or normalized.findings
+        or normalized.limitations
+    ):
+        status = CheckStatus.WARN
+    return CheckResult(
+        check_id=f"provider.{normalized.capability.lower()}",
+        source=f"provider:{normalized.provider_id}",
+        subject=subject,
+        required=False,
+        status=status,
+        deterministic=True,
+        reproducible=True,
+        confidence=1.0,
+        evidence=tuple(evidence),
+        remediation_stage=LifecycleState.VALIDATED,
+        artifact_reference=subject,
+    )
+
+
 class InternalFallbackProvider:
     """Minimal deterministic V1 implementation for one required capability."""
 
@@ -151,10 +194,12 @@ class ProviderGateway:
     def __init__(
         self,
         adapters: Iterable[ProviderAdapter] | None = None,
-        fallbacks: Mapping[str, ProviderAdapter] | None = None,
+        fallbacks: Mapping[str, ProviderAdapter | None] | None = None,
     ) -> None:
         self._adapters: list[ProviderAdapter] = []
-        self._fallbacks: dict[str, ProviderAdapter] = dict(fallbacks or internal_fallbacks())
+        self._fallbacks: dict[str, ProviderAdapter | None] = (
+            dict(internal_fallbacks()) if fallbacks is None else dict(fallbacks)
+        )
         for adapter in adapters or ():
             self.register(adapter)
 
@@ -179,7 +224,7 @@ class ProviderGateway:
             if descriptor.availability is ProviderStatus.UNAVAILABLE:
                 attempted.append(f"{descriptor.provider_id}: unavailable")
                 continue
-            unpinned = not descriptor.revision_or_version
+            unpinned = not _is_pinned_descriptor(descriptor)
             degraded = descriptor.availability is ProviderStatus.DEGRADED
             if formal_run and (unpinned or degraded):
                 attempted.append(f"{descriptor.provider_id}: unpinned/degraded")
@@ -205,9 +250,22 @@ class ProviderGateway:
             return normalized
         fallback = self._fallbacks.get(capability)
         if fallback is None:
-            raise RuntimeError(f"no provider or fallback configured for {capability}")
+            limitations = tuple(attempted) + ("no fallback configured; optional capability",)
+            return ProviderResult(
+                provider_id=f"optional.none.{capability.lower()}",
+                capability=capability,
+                provider_status=ProviderStatus.UNAVAILABLE,
+                findings=(),
+                candidate_changes=(),
+                evidence=(),
+                limitations=limitations,
+                fallback_used=False,
+            )
         result = normalize_provider_result(fallback.invoke(capability, request), capability=capability)
-        if attempted:
+        if attempted or not result.fallback_used:
+            limitations = result.limitations
+            if attempted:
+                limitations = limitations + ("; ".join(attempted),)
             result = ProviderResult(
                 result.provider_id,
                 result.capability,
@@ -215,7 +273,7 @@ class ProviderGateway:
                 result.findings,
                 result.candidate_changes,
                 result.evidence,
-                result.limitations + ("; ".join(attempted),),
+                limitations,
                 True,
             )
         return result
@@ -233,4 +291,16 @@ __all__ = [
     "internal_fallbacks",
     "normalize_provider_result",
     "normalize_findings",
+    "provider_result_to_check_result",
 ]
+
+
+def _is_pinned_descriptor(descriptor: ProviderDescriptor) -> bool:
+    source_identity = descriptor.source_identity
+    revision_or_version = descriptor.revision_or_version
+    return (
+        isinstance(source_identity, str)
+        and bool(source_identity.strip())
+        and isinstance(revision_or_version, str)
+        and bool(revision_or_version.strip())
+    )

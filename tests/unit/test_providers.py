@@ -23,8 +23,8 @@ class StubProvider:
         return self.result
 
 
-def provider(provider_id: str = "external", *, revision: str | None = "r1", status: ProviderStatus = ProviderStatus.AVAILABLE, result: object | None = None) -> StubProvider:
-    descriptor = ProviderDescriptor(provider_id, "test/source", revision, AUDIT_SKILL, status, "test", (), None)
+def provider(provider_id: str = "external", *, source_identity: str | None = "test/source", revision: str | None = "r1", status: ProviderStatus = ProviderStatus.AVAILABLE, result: object | None = None) -> StubProvider:
+    descriptor = ProviderDescriptor(provider_id, source_identity, revision, AUDIT_SKILL, status, "test", (), None)
     value = result or ProviderResult(provider_id, AUDIT_SKILL, status, ("finding",), (), ("evidence",), (), False)
     return StubProvider(descriptor, value)
 
@@ -85,7 +85,36 @@ def test_identity_does_not_change_normalized_findings() -> None:
     assert normalize_findings(first) == normalize_findings(second)
 
 
-def test_formal_run_treats_empty_revision_as_unpinned() -> None:
-    adapter = provider(revision="")
+@pytest.mark.parametrize("revision", ["", "   ", "\t\n"])
+def test_formal_run_treats_blank_revision_as_unpinned(revision: str) -> None:
+    adapter = provider(revision=revision)
     result = ProviderGateway([adapter]).invoke(AUDIT_SKILL, {}, formal_run=True)
     assert result.provider_id == "internal.audit.v1"
+
+
+@pytest.mark.parametrize("source_identity", [None, "", "   ", "\t\n"])
+def test_formal_run_treats_blank_source_identity_as_unpinned(source_identity: str | None) -> None:
+    adapter = provider(source_identity=source_identity)
+    result = ProviderGateway([adapter]).invoke(AUDIT_SKILL, {}, formal_run=True)
+    assert result.provider_id == "internal.audit.v1"
+
+
+def test_gateway_marks_fallback_used_even_when_fallback_result_does_not() -> None:
+    fallback = provider("custom-fallback", result=ProviderResult(
+        "custom-fallback", AUDIT_SKILL, ProviderStatus.AVAILABLE,
+        (), (), ("fallback evidence",), (), False,
+    ))
+    result = ProviderGateway(fallbacks={AUDIT_SKILL: fallback}).invoke(
+        AUDIT_SKILL, {}, formal_run=True,
+    )
+    assert result.provider_id == "custom-fallback"
+    assert result.fallback_used is True
+
+
+def test_gateway_accepts_explicit_empty_fallback_as_optional() -> None:
+    result = ProviderGateway(fallbacks={AUDIT_SKILL: None}).invoke(
+        AUDIT_SKILL, {}, formal_run=True,
+    )
+    assert result.provider_status is ProviderStatus.UNAVAILABLE
+    assert result.fallback_used is False
+    assert result.limitations
