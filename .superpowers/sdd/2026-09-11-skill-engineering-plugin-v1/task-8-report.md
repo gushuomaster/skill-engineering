@@ -24,6 +24,10 @@ Implemented the internal-only Create, Modify, Fix, Audit Only, and Audit + Optim
 
 Follow-up correctness fix: `19b3978 fix: return valid staged artifacts for change flows`.
 
+Fix-round correction: Audit + Optimize now defers its final Gate transition while read-only audit establishes modification need, then stages and re-runs validation/Gate; synthetic B07 PASS evidence was removed so defect flows without a regression runner remain blocked.
+
+Fix-round verification: Task 8 integration tests — **8 passed**; full suite — **202 passed, 2 skipped**.
+
 ## Concerns / Deferred Scope
 
 - Candidate generation is intentionally minimal and internal; no Rule Bloat, regression enhancement, Provider, or atomic publication behavior is included.
