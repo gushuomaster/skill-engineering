@@ -53,18 +53,6 @@ def test_frozen_v1_flows(case: str, expected_outcome: str, expected_publish: boo
             authorized_to_modify=True,
             target_parent=tmp_path,
         )
-        from dataclasses import replace
-        import engine.orchestrator as orchestrator_module
-        real_adjudicate = orchestrator_module.adjudicate
-        monkeypatch.setattr(
-            orchestrator_module,
-            "adjudicate",
-            lambda context, evidence, policy=None: replace(
-                real_adjudicate(context, evidence, policy=policy),
-                verdict=GateVerdict.PASS,
-                publish_authorized=True,
-            ),
-        )
     outcome = PipelineOrchestrator().run(request)
     assert outcome.outcome_type == expected_outcome
     assert outcome.gate_result.publish_authorized is expected_publish
