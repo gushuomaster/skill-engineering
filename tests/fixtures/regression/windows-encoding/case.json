@@ -1,0 +1,1 @@
+{"case_id":"windows-encoding","failure_family":"windows-encoding","description":"Preserves UTF-8 text on Windows.","observable_contract":"Unicode output remains readable.","required":true,"fixtures":["utf8.txt","unicode.txt"]}

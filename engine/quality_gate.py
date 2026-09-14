@@ -294,6 +294,12 @@ def _adjudicate_findings(
         )
         if regression is None or regression.status is not CheckStatus.PASS:
             _append_unique(blocking, "B07: required regression is absent or not passing")
+    elif (
+        decision is not None
+        and decision.regression_disposition is RegressionDisposition.RECOMMENDED
+        and not any(result.check_id == "B07" for result in valid_evidence)
+    ):
+        _append_unique(warnings, "recommended regression is absent")
 
     if (
         context.candidate_requires_publish
