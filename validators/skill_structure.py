@@ -10,12 +10,22 @@ from engine.models import ArtifactManifest, CheckResult, CheckStatus, LifecycleS
 
 _NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _PLACEHOLDER_PATTERN = re.compile(r"\b(?:TODO|TBD|FIXME|PLACEHOLDER|IMPLEMENT[_ -]?ME)\b", re.IGNORECASE)
+_AUTHORITATIVE_DIRECTORIES = frozenset({"references", "scripts", "validators", "schemas", "config"})
+_GENERATED_ARTIFACT_PARTS = frozenset({"__pycache__"})
+_GENERATED_ARTIFACT_SUFFIXES = frozenset({".pyc", ".pyo"})
 
 
-def _result(check_id: str, subject: str, status: CheckStatus, required: bool, evidence: str) -> CheckResult:
+def _result(
+    check_id: str,
+    subject: str,
+    status: CheckStatus,
+    required: bool,
+    evidence: str | tuple[str, ...],
+) -> CheckResult:
+    evidence_values = (evidence,) if isinstance(evidence, str) else tuple(evidence)
     return CheckResult(check_id, "internal.structure", subject, required, status, True, True,
                        1.0 if status is CheckStatus.PASS else 0.95,
-                       (evidence,), LifecycleState.VALIDATED, subject)
+                       evidence_values, LifecycleState.VALIDATED, subject)
 
 
 def _frontmatter(skill_path: Path) -> tuple[dict[str, object] | None, str | None]:
@@ -41,6 +51,61 @@ def _frontmatter(skill_path: Path) -> tuple[dict[str, object] | None, str | None
     return value, None
 
 
+def _declared_assets(frontmatter: dict[str, object] | None) -> tuple[str, ...]:
+    if not frontmatter:
+        return ()
+    raw = frontmatter.get("critical_assets", frontmatter.get("assets", ()))
+    if isinstance(raw, str):
+        return (raw,)
+    if isinstance(raw, (list, tuple)):
+        return tuple(item for item in raw if isinstance(item, str))
+    return ()
+
+
+def _authoritative_files(
+    root: Path,
+    manifest: ArtifactManifest,
+    frontmatter: dict[str, object] | None,
+) -> tuple[tuple[str, Path], ...]:
+    declared_assets = set(_declared_assets(frontmatter))
+    selected: list[tuple[str, Path]] = []
+    for relative in manifest.files:
+        relative_path = Path(relative)
+        generated = (
+            bool(_GENERATED_ARTIFACT_PARTS.intersection(relative_path.parts))
+            or relative_path.suffix.lower() in _GENERATED_ARTIFACT_SUFFIXES
+        )
+        if (
+            not generated
+            and (
+                relative == "SKILL.md"
+            or relative in declared_assets
+            or bool(relative_path.parts and relative_path.parts[0] in _AUTHORITATIVE_DIRECTORIES)
+            )
+        ):
+            selected.append((relative, root / relative_path))
+    return tuple(selected)
+
+
+def _placeholder_evidence(
+    root: Path,
+    manifest: ArtifactManifest,
+    frontmatter: dict[str, object] | None,
+) -> tuple[str, ...]:
+    findings: list[str] = []
+    for relative, path in _authoritative_files(root, manifest, frontmatter):
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line_number, line in enumerate(lines, 1):
+            for match in _PLACEHOLDER_PATTERN.finditer(line):
+                findings.append(
+                    f"placeholder token found: {relative}:{line_number}: {match.group(0)}"
+                )
+    return tuple(findings)
+
+
 def validate_skill_structure(manifest: ArtifactManifest) -> tuple[CheckResult, ...]:
     root = Path(manifest.artifact_root)
     subject = manifest.skill_name
@@ -62,19 +127,12 @@ def validate_skill_structure(manifest: ArtifactManifest) -> tuple[CheckResult, .
                            CheckStatus.PASS if agreement else CheckStatus.FAIL, True,
                            "directory and frontmatter name agree" if agreement else "directory and name disagree"))
 
-    files_text = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in root.rglob("*") if path.is_file())
-    placeholders = _PLACEHOLDER_PATTERN.search(files_text)
+    placeholder_evidence = _placeholder_evidence(root, manifest, frontmatter)
     results.append(_result("skill.structure.placeholders", subject,
-                           CheckStatus.FAIL if placeholders else CheckStatus.PASS, True,
-                           f"placeholder token found: {placeholders.group(0)}" if placeholders else "no placeholder tokens found"))
+                           CheckStatus.FAIL if placeholder_evidence else CheckStatus.PASS, True,
+                           placeholder_evidence or ("no placeholder tokens found",)))
 
-    declared_assets = ()
-    if frontmatter:
-        raw = frontmatter.get("critical_assets", frontmatter.get("assets", ()))
-        if isinstance(raw, str):
-            declared_assets = (raw,)
-        elif isinstance(raw, (list, tuple)):
-            declared_assets = tuple(item for item in raw if isinstance(item, str))
+    declared_assets = _declared_assets(frontmatter)
     missing_assets = tuple(item for item in declared_assets if not (root / item).is_file())
     results.append(_result("skill.structure.critical_assets", subject,
                            CheckStatus.FAIL if missing_assets else CheckStatus.PASS, True,
