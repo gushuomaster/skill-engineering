@@ -23,4 +23,3 @@ def test_invalid_frontmatter_and_placeholder_are_failures(tmp_path: Path) -> Non
     assert _check(results, "skill.structure.frontmatter").status is CheckStatus.FAIL
     assert _check(results, "skill.structure.name_format").status is CheckStatus.FAIL
     assert _check(results, "skill.structure.placeholders").status is CheckStatus.FAIL
-

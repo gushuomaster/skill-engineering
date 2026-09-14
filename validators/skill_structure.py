@@ -102,4 +102,3 @@ def validate_skill_structure(manifest: ArtifactManifest) -> tuple[CheckResult, .
                            CheckStatus.FAIL if missing_dependencies else CheckStatus.PASS, True,
                            "missing required dependencies: " + ", ".join(missing_dependencies) if missing_dependencies else "required dependencies verified"))
     return tuple(results)
-
