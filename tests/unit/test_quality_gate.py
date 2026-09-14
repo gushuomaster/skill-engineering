@@ -281,7 +281,7 @@ def test_b12_external_finding_mapped_to_internal_policy_blocks() -> None:
             source="provider:external-review",
             required=False,
             status=CheckStatus.FAIL,
-            evidence=("unresolved contract issue",),
+            evidence=("maps_to:B04", "unresolved contract issue"),
         ),
     )
 
@@ -289,6 +289,25 @@ def test_b12_external_finding_mapped_to_internal_policy_blocks() -> None:
 
     assert result.verdict is GateVerdict.FAIL
     assert any(finding.startswith("B12") for finding in result.blocking_findings)
+
+
+@pytest.mark.parametrize("policy_id", ["B01", "B05", "B10", "B12"])
+def test_external_self_report_without_mapping_is_warning_only(policy_id: str) -> None:
+    evidence = _passing_evidence() + (
+        _check(
+            policy_id,
+            source="provider:external-review",
+            required=False,
+            status=CheckStatus.FAIL,
+            evidence=("unresolved contract issue",),
+        ),
+    )
+
+    result = adjudicate(_context(), evidence)
+
+    assert result.verdict is GateVerdict.PASS
+    assert not any(finding.startswith(policy_id) for finding in result.blocking_findings)
+    assert any(policy_id in warning for warning in result.warnings)
 
 
 def test_b06_blocks_unjustified_prompt_rule_decision() -> None:

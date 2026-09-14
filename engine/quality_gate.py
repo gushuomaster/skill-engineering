@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
+import re
 from pathlib import Path
 
 import yaml
@@ -42,6 +44,21 @@ _CHECK_POLICY = {
     "skill.structure.required_dependencies": "B11",
     "reference.required.exists": "B02",
 }
+_CORE_POLICY_IDS = frozenset(f"B{number:02d}" for number in range(1, 13))
+_CORE_REQUIRED_CHECKS = frozenset(
+    {
+        "skill.structure.skill_md",
+        "skill.structure.frontmatter",
+        "skill.structure.name_format",
+        "skill.structure.directory_name",
+        "skill.structure.placeholders",
+        "skill.structure.critical_assets",
+        "skill.structure.schema",
+        "skill.structure.executables",
+        "skill.structure.required_dependencies",
+    }
+)
+_EXTERNAL_MAPPING = re.compile(r"(?:maps_to|mapping)\s*[:=]\s*(B(?:0[1-9]|1[01]))\b")
 
 
 class InvalidGatePolicy(ValueError):
@@ -95,12 +112,6 @@ def load_gate_policy(project_policy: Path | None = None) -> dict[str, object]:
         project_blocking
     ):
         raise InvalidGatePolicy("project policy cannot weaken core B01-B12")
-
-    project_extensions = set(project["project_extensions"])
-    if not project_extensions.issubset(project_required):
-        raise InvalidGatePolicy(
-            "project policy extensions must also be required checks"
-        )
 
     merged: dict[str, object] = {
         "policy_version": (
@@ -167,16 +178,45 @@ def _is_trustworthy(result: CheckResult) -> bool:
     return result.deterministic and result.reproducible and result.confidence > 0
 
 
-def _blocking_policy_for(result: CheckResult) -> str | None:
+def _blocking_policy_for(
+    result: CheckResult, blocking_policy_ids: set[str]
+) -> str | None:
     if result.check_id.startswith(("rule-bloat", "rule_bloat")):
         return None
     if result.check_id in _CHECK_POLICY:
         return _CHECK_POLICY[result.check_id]
-    if result.check_id.startswith("B"):
+    source = result.source.lower()
+    if not source.startswith("internal"):
+        if _EXTERNAL_MAPPING.search(" ".join(result.evidence)):
+            return "B12"
+        return (
+            result.check_id
+            if result.check_id in blocking_policy_ids
+            and result.check_id not in _CORE_POLICY_IDS
+            else None
+        )
+    if result.check_id in blocking_policy_ids:
         return result.check_id
     if result.required:
         return "B04"
     return None
+
+
+def _validate_effective_policy(policy: Mapping[str, object]) -> dict[str, object]:
+    if not isinstance(policy, Mapping):
+        raise InvalidGatePolicy("effective Gate policy must be a mapping")
+    effective = dict(policy)
+    try:
+        validate_contract("gate-policy", effective)
+    except Exception as exc:
+        raise InvalidGatePolicy(
+            f"effective Gate policy schema validation failed: {exc}"
+        ) from exc
+    if not _CORE_REQUIRED_CHECKS.issubset(set(effective["required_checks"])):
+        raise InvalidGatePolicy("effective policy cannot weaken core required checks")
+    if not _CORE_POLICY_IDS.issubset(set(effective["blocking_policy_ids"])):
+        raise InvalidGatePolicy("effective policy cannot weaken core B01-B12")
+    return effective
 
 
 def _adjudicate_findings(
@@ -209,7 +249,7 @@ def _adjudicate_findings(
 
     blocking_policy_ids = set(policy["blocking_policy_ids"])
     for result in valid_evidence:
-        mapped_policy = _blocking_policy_for(result)
+        mapped_policy = _blocking_policy_for(result, blocking_policy_ids)
         if result.required and (
             result.status in _ERROR_STATUSES or not _is_trustworthy(result)
         ):
@@ -272,17 +312,24 @@ def _adjudicate_findings(
 
 
 def adjudicate(
-    context: GateContext, evidence: tuple[CheckResult, ...]
+    context: GateContext,
+    evidence: tuple[CheckResult, ...],
+    *,
+    policy: Mapping[str, object] | None = None,
 ) -> GateResult:
-    """Return the sole final verdict after applying the versioned Gate policy."""
-    policy = load_gate_policy()
+    """Return the sole final verdict after applying an effective Gate policy."""
+    effective_policy = (
+        _read_policy(POLICY_PATH)
+        if policy is None
+        else _validate_effective_policy(policy)
+    )
     (
         blocking,
         warnings,
         required_count,
         missing_count,
         evidence_count,
-    ) = _adjudicate_findings(context, evidence, policy)
+    ) = _adjudicate_findings(context, evidence, effective_policy)
     verdict = GateVerdict.FAIL if blocking else GateVerdict.PASS
 
     publish_authorized = (
@@ -324,5 +371,5 @@ def adjudicate(
         required_checks_summary=required_checks_summary,
         evidence_summary=evidence_summary,
         publish_authorized=publish_authorized,
-        policy_version=str(policy["policy_version"]),
+        policy_version=str(effective_policy["policy_version"]),
     )
