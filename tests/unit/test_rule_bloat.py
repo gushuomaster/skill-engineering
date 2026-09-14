@@ -32,3 +32,32 @@ def test_similar_rules_are_merge_candidates(tmp_path: Path) -> None:
     finding = next(item for item in findings if "semantic_similarity" in item.signals)
     assert finding.candidate_action is GovernanceAction.MERGE
     assert finding.confidence < 1.0
+
+
+def test_missing_history_is_skip_limitation(tmp_path: Path) -> None:
+    (tmp_path / "SKILL.md").write_text("---\nname: demo\ndescription: demo\n---\n", encoding="utf-8")
+    finding = next(item for item in detect_rule_bloat(extract_rule_units(tmp_path), None) if "historical_growth" in item.signals)
+    from engine.rule_governance import governance_evidence, govern_findings
+    evidence = governance_evidence(govern_findings((finding,), ()))
+    assert evidence[0].status.value == "SKIP"
+
+
+def test_required_and_never_contradiction_is_conflict(tmp_path: Path) -> None:
+    (tmp_path / "SKILL.md").write_text("---\nname: demo\ndescription: demo\n---\n\nRequired publish checks.\nNever publish checks.\n", encoding="utf-8")
+    findings = detect_rule_bloat(extract_rule_units(tmp_path), None)
+    assert any("conflict" in finding.signals for finding in findings)
+
+
+def test_obsolete_resource_signal(tmp_path: Path) -> None:
+    (tmp_path / "SKILL.md").write_text("---\nname: demo\ndescription: demo\n---\n\nNever use Python 2 command /old/tool.exe.\n", encoding="utf-8")
+    findings = detect_rule_bloat(extract_rule_units(tmp_path), None)
+    assert any("obsolete_resource" in finding.signals for finding in findings)
+
+
+def test_collects_applicable_ancestor_agents(tmp_path: Path) -> None:
+    nested = tmp_path / "skills" / "demo"
+    nested.mkdir(parents=True)
+    (tmp_path / "AGENTS.md").write_text("Must obey repository policy.\n", encoding="utf-8")
+    (nested / "SKILL.md").write_text("---\nname: demo\ndescription: demo\n---\n", encoding="utf-8")
+    units = extract_rule_units(nested)
+    assert any(unit.scope == "AGENTS.md" for unit in units)

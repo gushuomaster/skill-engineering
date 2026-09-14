@@ -13,3 +13,14 @@ def test_detector_finding_reaches_gate_only_through_governance() -> None:
     assert evidence[0].source == "rule_governance"
     assert evidence[0].check_id.startswith("rule-governance")
     assert not hasattr(finding, "verdict")
+
+
+def test_governance_rejects_missing_rationale_or_evidence() -> None:
+    finding = RuleFinding(
+        finding_id="f2", affected_rule_units=("r1",), signals=("conflict",), confidence=0.9,
+        risk="high", rationale="", candidate_action=GovernanceAction.DELETE,
+        candidate_target_layer=None, evidence_refs=(), limitations=(),
+    )
+    import pytest
+    with pytest.raises(ValueError):
+        govern_findings((finding,), mechanisms=())
