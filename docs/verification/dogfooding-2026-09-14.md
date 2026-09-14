@@ -17,3 +17,14 @@
 - Classification: V1.1 backlog item only.
 - Current behavior: Rule Bloat receives `history=None`; missing Git history produces a warning and `SKIP`/limitation rather than a blocking result.
 - Scope decision: not modified as part of DOGFOOD-001.
+
+## RELEASE-001
+
+- Failure family: `release-metadata-version-drift`
+- Discovery: the published `v1.0.1` tag coexisted with `0.1.0` in both authoritative package manifests.
+- Root cause: release verification did not compare Git release version, Plugin manifest version, and Python package version.
+- Impact: release metadata did not identify the published product version consistently; immutable `v1.0.0` and `v1.0.1` remain unchanged.
+- Fix mechanism: authoritative Plugin and Python package versions are set to `1.0.2`; a regression test loads both declarations, requires SemVer `X.Y.Z`, and requires equality without hardcoding a Git tag.
+- Regression: `test_plugin_and_package_versions_match`.
+- Fix commit: recorded in the `v1.0.2` release commit.
+- Release tag: `v1.0.2`.
