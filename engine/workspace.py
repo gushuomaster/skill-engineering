@@ -7,8 +7,32 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from engine.inventory import assert_no_scope_escape, digest_tree
+from engine.inventory import assert_no_scope_escape, digest_tree, build_artifact_manifest
 from engine.models import Intent
+from engine.models import GateResult, GateOutcome, GateVerdict
+
+
+class PublishNotAuthorized(RuntimeError):
+    pass
+
+
+class SourceChangedError(RuntimeError):
+    finding_id = "B10"
+
+
+class CrossFilesystemPublishError(RuntimeError):
+    pass
+
+
+class PublishRecoveryError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class PublishResult:
+    published_path: Path
+    backup_path: Path | None
+    restored_after_failure: bool
 
 
 def _same_filesystem(first: Path, second: Path) -> bool:
@@ -108,3 +132,54 @@ class WorkspaceSession:
             return True
         assert_no_scope_escape(self.source)
         return digest_tree(self.source) == self.source_digest
+
+
+def publish_atomic(session: WorkspaceSession, gate: GateResult) -> PublishResult:
+    if not (gate.verdict is GateVerdict.PASS and gate.outcome is GateOutcome.READY_TO_PUBLISH and gate.publish_authorized):
+        raise PublishNotAuthorized("gate is not authorized for publication")
+    if session.staging is None or not session.staging.is_dir():
+        raise PublishNotAuthorized("staged candidate is required")
+    staging = session.staging.resolve()
+    target = next((p for p in staging.iterdir() if p.is_dir()), staging)
+    candidate_digest = digest_tree(target)
+    published = staging.parent / (session.source.name if session.source is not None else target.name)
+    if not _same_filesystem(staging, published.parent):
+        raise CrossFilesystemPublishError("staging and target must share a filesystem")
+    if session.source is not None and not session.verify_source_unchanged():
+        raise SourceChangedError("source changed after staging")
+    backup = published.parent / (published.name + ".backup") if published.exists() else None
+    moved_backup = False
+    try:
+        if published.exists():
+            if backup and backup.exists():
+                _remove_exact(backup, published.parent)
+            os.replace(str(published), str(backup))
+            moved_backup = True
+        os.replace(str(target), str(published))
+        if not (published / "SKILL.md").is_file():
+            raise ValueError("published candidate is not loadable")
+        manifest = build_artifact_manifest(published, session.intent, session.source_digest)
+        if manifest.content_digest != candidate_digest:
+            raise ValueError("published candidate digest mismatch")
+        return PublishResult(published, backup if moved_backup else None, False)
+    except Exception as exc:
+        try:
+            if published.exists() and published != backup:
+                _remove_exact(published, published.parent)
+            if moved_backup and backup and backup.exists():
+                os.replace(str(backup), str(published))
+        except Exception as restore_exc:
+            raise PublishRecoveryError("publication and recovery failed") from restore_exc
+        raise PublishRecoveryError("publication failed; original restored") from exc
+
+
+def _remove_exact(path: Path, parent: Path) -> None:
+    path = path.resolve(strict=False); parent = parent.resolve(strict=False)
+    if path.parent != parent or path == parent:
+        raise ValueError("unsafe cleanup path")
+    if path.is_dir():
+        for child in list(path.iterdir()):
+            _remove_exact(child, path)
+        path.rmdir()
+    elif path.exists():
+        path.unlink()

@@ -23,7 +23,7 @@ from engine.models import (
 from engine.quality_gate import GateContext, adjudicate, load_gate_policy
 from engine.providers import AUDIT_SKILL, ProviderGateway, provider_result_to_check_result
 from engine.state_machine import TransitionContext, transition
-from engine.workspace import WorkspaceSession
+from engine.workspace import WorkspaceSession, publish_atomic
 from engine.inventory import build_artifact_manifest
 from engine.rule_bloat import detect_rule_bloat, extract_rule_units
 from engine.rule_governance import governance_evidence, govern_findings
@@ -186,6 +186,9 @@ class PipelineOrchestrator:
 
                 return project_audit_failure(request.source, gate)
             raise PipelineBlockedError(gate)
+        if gate.publish_authorized and gate.outcome.value == "READY_TO_PUBLISH":
+            publish_atomic(session, gate)
+            self._record(LifecycleState.PUBLISHED)
         from engine.output import project_validated
 
         output_path = (
