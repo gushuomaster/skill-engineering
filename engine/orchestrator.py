@@ -130,15 +130,29 @@ class PipelineOrchestrator:
                                _context(intent, request, staging_exists=False))
 
         effective_policy = load_gate_policy(request.project_policy)
-        gate, state = self._audit_and_gate(
-            intent, request, session, artifact, decision, state, effective_policy
+        optimization_needed = intent is Intent.AUDIT_OPTIMIZE and (
+            bool(request.failure_evidence)
+            or decision.primary_issue_class is PrimaryIssueClass.CAPABILITY_INVARIANT_CHANGE
         )
-        if intent is Intent.AUDIT_OPTIMIZE and gate.verdict.value == "FAIL" and request.authorized_to_modify:
+        gate, state = self._audit_and_gate(
+            intent, request, session, artifact, decision, state, effective_policy,
+            defer_gate_transition=optimization_needed,
+        )
+        if intent is Intent.AUDIT_OPTIMIZE and optimization_needed and request.authorized_to_modify:
             session.prepare_optimization(
                 request.target_parent,
                 modification_needed=True,
                 authorized_to_modify=request.authorized_to_modify,
             )
+            if session.staging is not None:
+                renamed = session.staging.with_name("staged-skill")
+                session.staging.rename(renamed)
+                session.staging = renamed
+                skill_md = renamed / "SKILL.md"
+                if skill_md.is_file():
+                    text = skill_md.read_text(encoding="utf-8")
+                    text = re.sub(r"(?m)^name:\s*[^\r\n]+", "name: staged-skill", text, count=1)
+                    skill_md.write_text(text, encoding="utf-8")
             artifact = session.staging
             state = self._move(
                 state,
@@ -187,6 +201,7 @@ class PipelineOrchestrator:
         policy: dict[str, object],
         *,
         candidate_requires_publish: bool | None = None,
+        defer_gate_transition: bool = False,
     ) -> tuple[GateResult, LifecycleState]:
         if artifact is None:
             gate = _blocked_gate(intent, request, decision=decision, policy=policy)
@@ -195,16 +210,15 @@ class PipelineOrchestrator:
         evidence = validate_skill_structure(manifest) + validate_references(manifest)
         if decision.primary_issue_class is PrimaryIssueClass.INSUFFICIENT_EVIDENCE:
             evidence += (_diagnostic_failure(manifest.skill_name),)
-        if decision.regression_disposition is RegressionDisposition.REQUIRED:
-            evidence += (_regression_pass(manifest.skill_name),)
         state = self._move(
             state,
             LifecycleState.AUDITED,
             _context(intent, request, staging_exists=session.staging is not None),
         ) if state is not LifecycleState.AUDITED else state
+        if defer_gate_transition:
+            return _deferred_adjudication(intent, request, decision, evidence, policy), state
         state = self._move(
-            state,
-            LifecycleState.VALIDATED,
+            state, LifecycleState.VALIDATED,
             _context(intent, request, staging_exists=session.staging is not None),
         )
         publish = (
@@ -289,7 +303,9 @@ def _make_decision(intent: Intent, request: EngineeringRequest) -> DecisionRecor
         primary = PrimaryIssueClass.IMPLEMENTATION_DEFECT
         root = "; ".join(request.failure_evidence)
         return DecisionRecord(intent, primary, (ControlGap.IMPLEMENTATION_GAP,), RegressionDisposition.REQUIRED, root, (), (), (), None)
-    if intent is Intent.MODIFY and any(token in requirement for token in ("prefer", "style", "format", "preference", "偏好", "格式")):
+    if intent is Intent.AUDIT_OPTIMIZE and any(token in requirement for token in ("optimize", "优化")):
+        primary = PrimaryIssueClass.CAPABILITY_INVARIANT_CHANGE
+    elif intent is Intent.MODIFY and any(token in requirement for token in ("prefer", "style", "format", "preference", "偏好", "格式")):
         primary = PrimaryIssueClass.TASK_LOCAL_PREFERENCE
     elif intent is Intent.MODIFY:
         primary = PrimaryIssueClass.CAPABILITY_INVARIANT_CHANGE
@@ -323,4 +339,18 @@ def _blocked_gate(intent: Intent, request: EngineeringRequest, *, decision: Deci
         GateContext(intent, LifecycleState.VALIDATED, request.authorized_to_modify, True, False, decision),
         (),
         policy=effective,
+    )
+
+
+def _deferred_adjudication(
+    intent: Intent,
+    request: EngineeringRequest,
+    decision: DecisionRecord,
+    evidence: tuple[CheckResult, ...],
+    policy: dict[str, object],
+) -> GateResult:
+    return adjudicate(
+        GateContext(intent, LifecycleState.VALIDATED, request.authorized_to_modify, False, False, decision),
+        evidence,
+        policy=policy,
     )

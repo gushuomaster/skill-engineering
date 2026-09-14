@@ -56,18 +56,20 @@ def test_mutating_flows_stage_before_classification(intent: Intent, tmp_path: Pa
     source = FIXTURES / "minimal-valid"
     trace: list[LifecycleState] = []
     orchestrator = PipelineOrchestrator(state_observer=trace.append)
-    outcome = orchestrator.run(
-        request(
-            source,
-            intent=intent,
-            requirement="repair the skill",
-            failure_evidence=("the behavior is reproducibly wrong",) if intent is Intent.FIX else (),
-            authorized_to_modify=True,
-            target_parent=tmp_path,
+    try:
+        outcome = orchestrator.run(
+            request(
+                source,
+                intent=intent,
+                requirement="repair the skill",
+                failure_evidence=("the behavior is reproducibly wrong",) if intent is Intent.FIX else (),
+                authorized_to_modify=True,
+                target_parent=tmp_path,
+            )
         )
-    )
-
-    assert outcome.outcome_type == "Validated Complete Skill"
+        assert outcome.outcome_type == "Validated Complete Skill"
+    except PipelineBlockedError:
+        assert intent is Intent.FIX
     assert trace.index(LifecycleState.STAGED) < trace.index(LifecycleState.CLASSIFIED)
 
 
@@ -101,3 +103,39 @@ def test_non_audit_blocked_flow_has_no_artifact(tmp_path: Path) -> None:
             )
         )
     assert caught.value.gate_result.verdict is GateVerdict.FAIL
+
+
+def test_audit_optimize_needed_change_stages_and_can_publish(tmp_path: Path) -> None:
+    source = FIXTURES / "minimal-valid"
+    trace: list[LifecycleState] = []
+    outcome = PipelineOrchestrator(state_observer=trace.append).run(
+        request(
+            source,
+            intent=Intent.AUDIT_OPTIMIZE,
+            requirement="audit and optimize this capability",
+            authorized_to_modify=True,
+            target_parent=tmp_path,
+        )
+    )
+
+    assert LifecycleState.STAGED in trace
+    assert outcome.gate_result.publish_authorized is True
+    assert outcome.artifact_path != source
+
+
+def test_fix_defect_without_regression_runner_is_blocked(tmp_path: Path) -> None:
+    source = FIXTURES / "minimal-valid"
+    with pytest.raises(PipelineBlockedError) as caught:
+        PipelineOrchestrator().run(
+            request(
+                source,
+                intent=Intent.FIX,
+                requirement="fix this skill",
+                failure_evidence=("reproducible defect",),
+                authorized_to_modify=True,
+                target_parent=tmp_path,
+            )
+        )
+
+    assert caught.value.gate_result.verdict is GateVerdict.FAIL
+    assert any(finding.startswith("B07") for finding in caught.value.gate_result.blocking_findings)
