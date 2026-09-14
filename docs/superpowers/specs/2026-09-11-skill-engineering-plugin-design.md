@@ -9,6 +9,16 @@
 | Implementation status | Not started |
 | Authority | This document is the sole architecture baseline for the implementation plan |
 
+## Contract Revision Record
+
+**2026-09-14 — Final/Frozen amendment**
+
+- The Gate entry point is `adjudicate(context, evidence, *, policy: Mapping[str, object] | None = None)`; if a formal `GatePolicy` type is introduced later, this mapping type may converge on it.
+- `policy=None` uses the core policy. Project policy is read, validated, and merged by the upper-layer loader before adjudication.
+- `adjudicate` accepts only the effective policy supplied by its caller; it does not search configuration or use global policy state.
+- Project policy may only make the core policy stricter or add blocking/warning rules; it cannot weaken or disable `B01–B12`.
+- `GateResult.policy_version` records the version of the effective policy actually used for the decision.
+
 ## 1. Problem Statement
 
 Skill maintenance often follows a harmful loop:
@@ -812,6 +822,19 @@ GateResult
 └── policy_version
 ```
 
+The adjudication contract is:
+
+```python
+def adjudicate(
+    context: GateContext,
+    evidence: tuple[CheckResult, ...],
+    *,
+    policy: Mapping[str, object] | None = None,
+) -> GateResult: ...
+```
+
+When `policy` is `None`, adjudication uses the immutable core policy. The caller supplies an already effective policy for project-specific decisions; adjudication does not load or search project configuration and does not consult global policy state. `GateResult.policy_version` is the version of that effective policy.
+
 `verdict` answers whether the Skill satisfies the quality policy. `publish_authorized` answers whether the Workspace Controller may execute publication or replacement; these are separate contracts.
 
 - Create/Modify/Fix/Audit + Optimize with PASS and a candidate requiring delivery: `publish_authorized = true`.
@@ -827,7 +850,8 @@ PASS is necessary but not sufficient for publication authority. Publication also
 - Project policy may add blocking or warning rules.
 - It may strengthen but cannot disable or weaken `B01–B12`.
 - Custom policy must be schema-valid.
-- The effective policy version is recorded in `GateResult`.
+- The upper-layer loader reads, validates, and merges project policy into an effective policy before calling the Gate.
+- The effective policy version actually used is recorded in `GateResult.policy_version`.
 
 ## 19. Atomic Publication — Final
 

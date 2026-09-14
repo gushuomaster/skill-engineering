@@ -943,13 +943,13 @@ git commit -m "feat: collect deterministic skill evidence"
 
 **Inputs:** Frozen design Sections 6, 18, and 25; Tasks 2 and 6.
 
-**Outputs:** Versioned core Gate policy and sole final verdict implementation.
+**Outputs:** Versioned core Gate policy, explicit effective-policy loading/validation/merge, and sole final verdict implementation.
 
 **Dependencies:** Tasks 2 and 6.
 
 **Parallelism:** Serial before the minimal pipeline.
 
-**Tests:** `tests/unit/test_quality_gate.py` and `tests/unit/test_gate_policy.py` for `B01–B12`, warnings, authority, and policy extension.
+**Tests:** `tests/unit/test_quality_gate.py` and `tests/unit/test_gate_policy.py` for `B01–B12`, warnings, authority, and effective-policy extension. The adjudication contract uses keyword-only `policy`.
 
 **Files:**
 
@@ -974,8 +974,15 @@ class GateContext:
 
 
 def load_gate_policy(project_policy: Path | None = None) -> dict[str, object]: ...
-def adjudicate(context: GateContext, evidence: tuple[CheckResult, ...]) -> GateResult: ...
+def adjudicate(
+    context: GateContext,
+    evidence: tuple[CheckResult, ...],
+    *,
+    policy: Mapping[str, object] | None = None,
+) -> GateResult: ...
 ```
+
+`load_gate_policy` is responsible for loading, schema-validating, and merging an explicitly supplied project policy with the immutable core policy. It does not search project configuration. `adjudicate` receives only the effective policy; `policy=None` selects the core policy, and no global policy state is consulted.
 
 - [ ] **Step 1: Write B08 and B11 tests**
 
@@ -1018,18 +1025,16 @@ def test_publishable_candidate_is_ready_but_not_yet_published() -> None:
     assert result.outcome is GateOutcome.READY_TO_PUBLISH
 ```
 
-- [ ] **Step 3: Write policy-extension tests**
+- [ ] **Step 3: Write effective-policy contract tests**
 
-```python
-def test_project_policy_can_add_blocking_rule(valid_stricter_policy: Path) -> None:
-    policy = load_gate_policy(valid_stricter_policy)
-    assert "PROJECT_B01" in policy["blocking"]
+Add tests covering these six contracts:
 
-
-def test_project_policy_cannot_disable_core_rule(invalid_weakened_policy: Path) -> None:
-    with pytest.raises(PolicyWeakeningError):
-        load_gate_policy(invalid_weakened_policy)
-```
+1. `policy=None` uses the core policy.
+2. A project policy that adds a warning appears in `GateResult.warnings`.
+3. A project policy that adds a blocking rule can change `GateResult.verdict`.
+4. A project policy that lowers any `B01–B12` requirement is rejected by the loader.
+5. Different effective policies produce the corresponding `GateResult.policy_version`.
+6. No global policy state participates in adjudication: two consecutive calls with different explicitly supplied policies are independent, and the Gate neither searches nor reads project configuration.
 
 - [ ] **Step 4: Run tests and observe missing Gate**
 
@@ -1045,9 +1050,9 @@ Expected: FAIL.
 
 Assign applicability, required evidence identifiers, and remediation stages. Do not encode Skill names, OS special cases, or historical bug IDs.
 
-- [ ] **Step 6: Implement policy merge and adjudication**
+- [ ] **Step 6: Implement policy loading, merge, and adjudication**
 
-Core rules are immutable. Project rules append or strengthen requirements. Compute quality verdict before publication authority; then set:
+Load and schema-validate the core policy, then merge only an explicitly supplied project policy path. Core rules are immutable; project rules may append or strengthen requirements but cannot weaken or disable `B01–B12`. Keep policy loading out of `adjudicate`. The Gate accepts the effective policy through keyword-only `policy`; `policy=None` selects core policy, with no configuration search or global state. Compute quality verdict before publication authority; then set:
 
 ```python
 publish_authorized = (
@@ -1075,7 +1080,7 @@ git add config/gate-policy.yaml engine/quality_gate.py tests/unit/test_quality_g
 git commit -m "feat: add internal skill quality gate"
 ```
 
-**Acceptance Criteria:** Only `adjudicate()` returns final verdict; optional Provider errors do not directly fail; B08/B11 match the frozen contract; PASS and publish authority remain independent.
+**Acceptance Criteria:** Only `adjudicate()` returns final verdict; it accepts keyword-only `policy` and uses only the supplied effective policy (or core policy when `None`); optional Provider errors do not directly fail; B08/B11 match the frozen contract; project policy loading validates and merges without weakening `B01–B12`; all six effective-policy contract tests pass; `GateResult.policy_version` identifies the effective version actually used; PASS and publish authority remain independent.
 
 ---
 
@@ -1110,6 +1115,7 @@ class EngineeringRequest:
     failure_evidence: tuple[str, ...]
     authorized_to_modify: bool
     target_parent: Path
+    project_policy: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -1179,9 +1185,9 @@ The Python API accepts `intent=None`; the internal detector then derives the mod
 
 `engine/output.py` must expose only complete artifact paths and the four minimal Audit Only blocking fields. A non-Audit operation that cannot reach a legal result raises `PipelineBlockedError` and delivers no `EngineeringOutcome` or artifact. The output layer must not serialize complete `DecisionRecord`, similarity scores, Provider internals, or the entire evidence store.
 
-- [ ] **Step 6: Implement the internal-only pipeline**
+- [ ] **Step 6: Implement the internal-only pipeline and policy boundary**
 
-Use internal candidate generation sufficient for test fixtures. Call state machine, workspace, diagnostics, mechanism selector, validators, Evidence Collector, and Quality Gate. Do not add Rule Bloat or external Provider behavior yet.
+Use internal candidate generation sufficient for test fixtures. The orchestrator owns the project-policy boundary: `project_policy` path/input → Task 7 load/validate/merge → explicit effective policy → `adjudicate(..., policy=effective_policy)`. Task 7 must not search project configuration or rely on global policy state. Call state machine, workspace, diagnostics, mechanism selector, validators, Evidence Collector, and Quality Gate. Do not add Rule Bloat or external Provider behavior yet.
 
 - [ ] **Step 7: Add the CLI contract**
 
@@ -1224,7 +1230,7 @@ git add engine/orchestrator.py engine/output.py scripts/skill_engineering.py tes
 git commit -m "feat: run minimal skill governance pipeline"
 ```
 
-**Acceptance Criteria:** All five operation modes execute without external Providers; Audit Only produces exactly the two legal outcomes; staging-first transitions are visible; the internal Gate is the only final verdict source.
+**Acceptance Criteria:** All five operation modes execute without external Providers; project policy input follows the explicit load/validate/merge/effective-policy/adjudicate boundary; Audit Only produces exactly the two legal outcomes; staging-first transitions are visible; the internal Gate is the only final verdict source.
 
 ---
 
