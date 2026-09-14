@@ -19,7 +19,7 @@
 
 ## Commit
 
-Recorded in the independent Task 11 commit: `feat: add replaceable skill providers`.
+Provider implementation was recorded in `39f790f` (`feat: add replaceable skill providers`); this report is finalized separately because concurrent tasks advanced the shared branch.
 
 ## Scope
 
