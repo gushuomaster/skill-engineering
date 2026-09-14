@@ -15,4 +15,3 @@ Run focused checks while iterating:
 python -m pytest tests/unit -v
 python C:\Users\28320\.codex\skills\.system\skill-creator\scripts\quick_validate.py skills/skill-engineer
 ```
-

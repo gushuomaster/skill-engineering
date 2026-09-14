@@ -28,4 +28,3 @@ def test_provider_configuration_is_separate_and_schema_shaped() -> None:
     for provider in config["providers"]:
         assert {"provider_id", "capability", "optional", "fallback_provider"}.issubset(provider)
         assert "blocking_policy_ids" not in provider
-
