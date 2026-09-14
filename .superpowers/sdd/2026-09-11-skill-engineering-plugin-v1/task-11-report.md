@@ -37,3 +37,9 @@ No Task 12 publication or recovery behavior was added.
 - `python -m pytest tests/unit/test_providers.py tests/integration/test_provider_fallback.py -q` — **26 passed**.
 - `python -m pytest tests/integration/test_minimal_pipeline.py -q` — **9 passed**.
 - `python -m pytest -q` — **253 passed, 2 skipped** (Windows symlink privilege skips).
+
+### Hygiene Verification
+
+- `engine/rule_bloat.py` now matches the Task9-approved `_DIRECTIVE` definition from `fba2111`; the later Task9 governance changes from `ab39827` remain intact.
+- `python -m pytest tests/unit/test_providers.py tests/integration/test_provider_fallback.py tests/unit/test_rule_bloat.py tests/unit/test_rule_governance.py tests/integration/test_rule_governance_pipeline.py -q` — **36 passed**.
+- `git diff --check` — **clean**.
