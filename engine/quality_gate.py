@@ -157,19 +157,31 @@ def _append_unique(values: list[str], value: str) -> None:
 
 def _collect_valid_evidence(
     evidence: tuple[CheckResult, ...],
+    *,
+    force_required_check_ids: frozenset[str] = frozenset(),
+    force_optional_check_ids: frozenset[str] = frozenset(),
+    ignored_check_ids: frozenset[str] = frozenset(),
 ) -> tuple[tuple[CheckResult, ...], tuple[str, ...], tuple[str, ...]]:
     collector = EvidenceCollector()
     required_errors: list[str] = []
     optional_errors: list[str] = []
     for result in evidence:
+        if getattr(result, "check_id", None) in ignored_check_ids:
+            continue
         try:
             collector.add(result)
         except InvalidEvidence as exc:
-            target = (
-                optional_errors
-                if getattr(result, "required", True) is False
-                else required_errors
-            )
+            check_id = getattr(result, "check_id", None)
+            if check_id in force_required_check_ids:
+                target = required_errors
+            elif check_id in force_optional_check_ids:
+                target = optional_errors
+            else:
+                target = (
+                    optional_errors
+                    if getattr(result, "required", True) is False
+                    else required_errors
+                )
             target.append(str(exc))
     return collector.snapshot(), tuple(required_errors), tuple(optional_errors)
 
@@ -226,8 +238,27 @@ def _adjudicate_findings(
 ) -> tuple[tuple[str, ...], tuple[str, ...], int, int, int]:
     blocking: list[str] = []
     warnings: list[str] = []
+    decision = context.decision
+    regression_disposition = (
+        decision.regression_disposition if decision is not None else None
+    )
     valid_evidence, invalid_required, invalid_optional = _collect_valid_evidence(
-        evidence
+        evidence,
+        force_required_check_ids=(
+            frozenset({"B07"})
+            if regression_disposition is RegressionDisposition.REQUIRED
+            else frozenset()
+        ),
+        force_optional_check_ids=(
+            frozenset({"B07"})
+            if regression_disposition is RegressionDisposition.RECOMMENDED
+            else frozenset()
+        ),
+        ignored_check_ids=(
+            frozenset({"B07"})
+            if regression_disposition is RegressionDisposition.NOT_APPLICABLE
+            else frozenset()
+        ),
     )
     required_results = tuple(result for result in valid_evidence if result.required)
     required_ids = set(policy["required_checks"])
@@ -249,6 +280,13 @@ def _adjudicate_findings(
 
     blocking_policy_ids = set(policy["blocking_policy_ids"])
     for result in valid_evidence:
+        if result.check_id == "B07":
+            if regression_disposition is RegressionDisposition.RECOMMENDED:
+                if result.status is not CheckStatus.PASS or not _is_trustworthy(result):
+                    _append_unique(warnings, _warning(result))
+                continue
+            if regression_disposition is RegressionDisposition.NOT_APPLICABLE:
+                continue
         mapped_policy = _blocking_policy_for(result, blocking_policy_ids)
         if result.required and (
             result.status in _ERROR_STATUSES or not _is_trustworthy(result)
@@ -274,7 +312,6 @@ def _adjudicate_findings(
         }:
             _append_unique(warnings, _warning(result))
 
-    decision = context.decision
     if (
         decision is not None
         and PROMPT_RULE in decision.selected_mechanisms
@@ -289,11 +326,28 @@ def _adjudicate_findings(
         and decision.regression_disposition is RegressionDisposition.REQUIRED
     ):
         regression = next(
-            (result for result in required_results if result.check_id == "B07"),
+            (result for result in valid_evidence if result.check_id == "B07"),
             None,
         )
-        if regression is None or regression.status is not CheckStatus.PASS:
+        if regression is None:
             _append_unique(blocking, "B07: required regression is absent or not passing")
+        else:
+            if not regression.required:
+                _append_unique(
+                    blocking,
+                    "B08: required regression result is marked optional",
+                )
+            if not _is_trustworthy(regression):
+                _append_unique(blocking, _finding("B08", regression))
+            if (
+                not regression.required
+                or regression.status is not CheckStatus.PASS
+                or not _is_trustworthy(regression)
+            ):
+                _append_unique(
+                    blocking,
+                    "B07: required regression is absent or not passing",
+                )
     elif (
         decision is not None
         and decision.regression_disposition is RegressionDisposition.RECOMMENDED

@@ -1,5 +1,7 @@
 from dataclasses import replace
 
+import pytest
+
 from engine.models import CheckResult, CheckStatus, DecisionRecord, Intent, LifecycleState, PrimaryIssueClass, ControlGap, RegressionDisposition
 from engine.quality_gate import GateContext, adjudicate
 
@@ -38,3 +40,46 @@ def test_recommended_regression_absence_is_warning_only() -> None:
     result = adjudicate(context, _evidence())
     assert result.verdict.value == "PASS"
     assert any("recommended regression" in warning for warning in result.warnings)
+
+
+@pytest.mark.parametrize("status", [CheckStatus.FAIL, CheckStatus.ERROR, CheckStatus.NOT_EXECUTED])
+def test_recommended_regression_nonpassing_is_warning_only(status: CheckStatus) -> None:
+    decision = replace(_context().decision, regression_disposition=RegressionDisposition.RECOMMENDED)
+    context = replace(_context(), decision=decision)
+    regression = replace(_check("B07"), required=True, status=status)
+
+    result = adjudicate(context, _evidence() + (regression,))
+
+    assert result.verdict.value == "PASS"
+    assert not any(finding.startswith("B07") for finding in result.blocking_findings)
+    assert any("B07" in warning for warning in result.warnings)
+
+
+def test_required_optional_regression_blocks_with_b07_and_b08() -> None:
+    regression = replace(_check("B07"), required=False)
+
+    result = adjudicate(_context(), _evidence() + (regression,))
+
+    assert any(finding.startswith("B07") for finding in result.blocking_findings)
+    assert any(finding.startswith("B08") for finding in result.blocking_findings)
+
+
+def test_required_untrustworthy_passing_regression_blocks_with_b07_and_b08() -> None:
+    regression = replace(_check("B07"), deterministic=False)
+
+    result = adjudicate(_context(), _evidence() + (regression,))
+
+    assert any(finding.startswith("B07") for finding in result.blocking_findings)
+    assert any(finding.startswith("B08") for finding in result.blocking_findings)
+
+
+def test_not_applicable_regression_does_not_synthesize_result() -> None:
+    decision = replace(_context().decision, regression_disposition=RegressionDisposition.NOT_APPLICABLE)
+    context = replace(_context(), decision=decision)
+
+    result = adjudicate(context, _evidence())
+
+    assert result.verdict.value == "PASS"
+    assert not any("B07" in finding for finding in result.blocking_findings)
+    assert not any("B07" in warning for warning in result.warnings)
+    assert result.evidence_summary.startswith("9 valid evidence results")
