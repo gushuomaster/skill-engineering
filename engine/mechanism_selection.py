@@ -1,7 +1,7 @@
-"""Deterministic mechanism selection for classified diagnostic records."""
+"""Validate mechanism selections supplied by Codex."""
 
 import json
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 
 from engine.diagnostics import InvalidDecisionRecord, validate_classification
 from engine.models import DecisionRecord, PrimaryIssueClass
@@ -59,19 +59,6 @@ class PromptRuleJustification:
             return None
         return cls(**payload)
 
-_DEFAULT_SELECTIONS = {
-    PrimaryIssueClass.IMPLEMENTATION_DEFECT: (IMPLEMENTATION_FIX, REGRESSION_TEST),
-    PrimaryIssueClass.ENVIRONMENT_COMPATIBILITY: (ENVIRONMENT_TOOLING, REGRESSION_TEST),
-    PrimaryIssueClass.WORKFLOW_DESIGN_DEFECT: (WORKFLOW_REFACTOR, REGRESSION_TEST),
-    PrimaryIssueClass.CONTRACT_ENFORCEMENT_GAP: (SCHEMA_VALIDATOR, REGRESSION_TEST),
-    PrimaryIssueClass.CAPABILITY_INVARIANT_CHANGE: (MERGE_INVARIANT,),
-    PrimaryIssueClass.TASK_LOCAL_PREFERENCE: (),
-    PrimaryIssueClass.DOCUMENTATION_GAP: (REFERENCE_OR_INSTRUCTION,),
-    PrimaryIssueClass.NO_DEFECT: (),
-    PrimaryIssueClass.INSUFFICIENT_EVIDENCE: (),
-}
-
-
 def prompt_rule_allowed(record: DecisionRecord) -> bool:
     """Return whether the record contains the complete Prompt Rule justification."""
     if not _mechanisms_are_valid(record):
@@ -84,27 +71,18 @@ def prompt_rule_allowed(record: DecisionRecord) -> bool:
     return justification is not None and all(asdict(justification).values())
 
 
-def select_mechanisms(record: DecisionRecord) -> DecisionRecord:
-    """Select frozen mechanisms and record every unselected alternative."""
+def validate_mechanism_selection(record: DecisionRecord) -> DecisionRecord:
+    """Validate Codex's explicit mechanism choice without replacing it."""
     validate_classification(record)
     _validate_mechanisms(record)
-    requested_prompt_rule = PROMPT_RULE in record.selected_mechanisms
-    if requested_prompt_rule:
-        if not prompt_rule_allowed(record):
-            raise InvalidDecisionRecord("Prompt Rule selection requires complete justification")
-        selected = (PROMPT_RULE,)
-    else:
-        selected = _DEFAULT_SELECTIONS[record.primary_issue_class]
-    rejected = tuple(mechanism for mechanism in _MECHANISM_ORDER if mechanism not in selected)
-    return replace(
-        record,
-        selected_mechanisms=selected,
-        rejected_mechanisms=rejected,
-    )
-
-
-def _non_empty(value: str | None) -> bool:
-    return value is not None and bool(value.strip())
+    declared = set(record.selected_mechanisms) | set(record.rejected_mechanisms)
+    if declared != set(_MECHANISM_ORDER):
+        raise InvalidDecisionRecord(
+            "Codex must explicitly select or reject every known mechanism"
+        )
+    if PROMPT_RULE in record.selected_mechanisms and not prompt_rule_allowed(record):
+        raise InvalidDecisionRecord("Prompt Rule selection requires complete justification")
+    return record
 
 
 def _validate_mechanisms(record: DecisionRecord) -> None:

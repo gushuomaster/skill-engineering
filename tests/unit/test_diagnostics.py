@@ -141,3 +141,9 @@ def test_task_local_preference_cannot_contain_persistent_mechanisms() -> None:
                 selected_mechanisms=("implementation_fix",),
             )
         )
+
+
+def test_semantic_decision_must_be_authored_by_codex() -> None:
+    record = DecisionRecord(**{**decision().__dict__, "decided_by": "provider"})
+    with pytest.raises(InvalidDecisionRecord, match="authored by Codex"):
+        validate_classification(record)

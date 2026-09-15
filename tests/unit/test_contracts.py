@@ -7,7 +7,7 @@ from engine.contracts import validate_contract
 FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "contracts"
 def load_fixture(name: str) -> dict[str, object]:
     return json.loads((FIXTURE_ROOT / name).read_text(encoding="utf-8"))
-@pytest.mark.parametrize("schema_name, fixture_name", [("artifact-manifest", "artifact_manifest_create.json"), ("decision-record", "decision_create.json"), ("provider-result", "provider_result.json"), ("check-result", "check_result.json"), ("regression-case", "regression_case.json"), ("behavioral-scenario", "behavioral_scenario.json"), ("behavioral-result", "behavioral_result.json"), ("gate-policy", "gate_policy.json"), ("gate-result", "gate_audit_pass.json")])
+@pytest.mark.parametrize("schema_name, fixture_name", [("artifact-manifest", "artifact_manifest_create.json"), ("decision-record", "decision_create.json"), ("provider-result", "provider_result.json"), ("check-result", "check_result.json"), ("regression-case", "regression_case.json"), ("behavioral-scenario", "behavioral_scenario.json"), ("behavioral-result", "behavioral_result.json"), ("gate-policy", "gate_policy.json"), ("gate-result", "gate_audit_pass.json"), ("semantic-confirmation", "semantic_confirmation.json")])
 def test_each_schema_accepts_positive_fixture(schema_name: str, fixture_name: str) -> None:
     validate_contract(schema_name, load_fixture(fixture_name))
 @pytest.mark.parametrize("schema_name, fixture_name", [("check-result", "check_result_invalid.json"), ("regression-case", "regression_case_invalid.json"), ("behavioral-scenario", "behavioral_scenario_invalid.json"), ("behavioral-result", "behavioral_result_invalid.json"), ("gate-policy", "gate_policy_invalid.json")])
@@ -43,3 +43,9 @@ def test_check_result_requires_reason_and_known_stage(fixture_name: str) -> None
 
 def test_decision_rejects_unknown_control_gap() -> None:
     with pytest.raises(ValidationError): validate_contract("decision-record", load_fixture("decision_unknown_control_gap.json"))
+
+def test_semantic_confirmation_requires_codex_and_exact_digest() -> None:
+    payload = load_fixture("semantic_confirmation.json")
+    payload["confirmed_by"] = "provider"
+    with pytest.raises(ValidationError):
+        validate_contract("semantic-confirmation", payload)

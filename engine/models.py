@@ -22,7 +22,10 @@ class ArtifactManifest:
     intent: Intent; artifact_root: str; skill_name: str; source_revision: str | None; source_digest: str | None; files: tuple[str, ...]; executable_assets: tuple[str, ...]; required_references: tuple[str, ...]; test_inventory: tuple[str, ...]; content_digest: str
 @dataclass(frozen=True)
 class DecisionRecord:
-    intent: Intent; primary_issue_class: PrimaryIssueClass; control_gaps: tuple[ControlGap, ...]; regression_disposition: RegressionDisposition; root_cause: str | None; evidence_limitations: tuple[str, ...]; selected_mechanisms: tuple[str, ...]; rejected_mechanisms: tuple[str, ...]; prompt_rule_justification: str | None
+    intent: Intent; primary_issue_class: PrimaryIssueClass; control_gaps: tuple[ControlGap, ...]; regression_disposition: RegressionDisposition; root_cause: str | None; evidence_limitations: tuple[str, ...]; selected_mechanisms: tuple[str, ...]; rejected_mechanisms: tuple[str, ...]; prompt_rule_justification: str | None; decided_by: str = "CODEX"
+@dataclass(frozen=True)
+class SemanticConfirmation:
+    artifact_digest: str; rationale: str; confirmed_by: str = "CODEX"
 @dataclass(frozen=True)
 class ProviderDescriptor:
     provider_id: str; source_identity: str; revision_or_version: str | None; capability: str; availability: ProviderStatus; invocation_adapter: str; limitations: tuple[str, ...]; fallback_provider: str | None
@@ -34,4 +37,4 @@ class CheckResult:
     check_id: str; source: str; subject: str; required: bool; status: CheckStatus; deterministic: bool; reproducible: bool; confidence: float; evidence: tuple[str, ...]; remediation_stage: LifecycleState; artifact_reference: str | None
 @dataclass(frozen=True)
 class GateResult:
-    verdict: GateVerdict; outcome: GateOutcome; blocking_findings: tuple[str, ...]; warnings: tuple[str, ...]; required_checks_summary: str; evidence_summary: str; publish_authorized: bool; policy_version: str
+    verdict: GateVerdict; outcome: GateOutcome; blocking_findings: tuple[str, ...]; warnings: tuple[str, ...]; required_checks_summary: str; evidence_summary: str; semantic_confirmed: bool; publish_authorized: bool; policy_version: str

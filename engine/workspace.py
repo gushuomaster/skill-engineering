@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,12 +21,18 @@ class SourceChangedError(RuntimeError):
     finding_id = "B10"
 
 
+class CandidateChangedError(RuntimeError):
+    finding_id = "B12"
+
+
 class CrossFilesystemPublishError(RuntimeError):
     pass
 
 
 class PublishRecoveryError(RuntimeError):
-    pass
+    def __init__(self, message: str, result: "PublishResult") -> None:
+        super().__init__(message)
+        self.result = result
 
 
 @dataclass(frozen=True)
@@ -33,6 +40,18 @@ class PublishResult:
     published_path: Path
     backup_path: Path | None
     restored_after_failure: bool
+    source_digest_before: str | None
+    candidate_digest: str
+    published_digest: str | None
+    workspace_diff: WorkspaceDiff
+    status: str
+
+
+@dataclass(frozen=True)
+class WorkspaceDiff:
+    added: tuple[str, ...]
+    modified: tuple[str, ...]
+    deleted: tuple[str, ...]
 
 
 def _same_filesystem(first: Path, second: Path) -> bool:
@@ -69,6 +88,7 @@ class WorkspaceSession:
     source: Path | None
     staging: Path | None
     source_digest: str | None
+    confirmed_artifact_digest: str | None = None
 
     @classmethod
     def for_existing(cls, intent: Intent, source: Path) -> "WorkspaceSession":
@@ -100,6 +120,29 @@ class WorkspaceSession:
             shutil.copytree(self.source, staging, dirs_exist_ok=True)
             assert_no_scope_escape(staging)
         self.staging = staging
+
+    def stage_candidate(self, candidate: Path, target_parent: Path) -> Path:
+        """Copy a complete Codex-authored candidate into an engine-owned workspace."""
+        if self.intent is Intent.AUDIT_ONLY:
+            raise PermissionError("Audit Only cannot stage a candidate")
+        candidate = candidate.resolve(strict=True)
+        if not candidate.is_dir() or not (candidate / "SKILL.md").is_file():
+            raise ValueError("candidate must be a complete Skill directory")
+        assert_no_scope_escape(candidate)
+        if self.source is not None and candidate == self.source:
+            raise ValueError("candidate must be separate from the source Skill")
+        if self.staging is not None:
+            raise RuntimeError("workspace has already been prepared")
+        if self.source is not None:
+            _assert_target_parent_outside_source(self.source, target_parent)
+            if not self.verify_source_unchanged():
+                raise SourceChangedError("source changed before candidate staging")
+        staging = _allocate_staging(target_parent)
+        staged_candidate = staging / candidate.name
+        shutil.copytree(candidate, staged_candidate)
+        assert_no_scope_escape(staged_candidate)
+        self.staging = staging
+        return staged_candidate
 
     def prepare_optimization(
         self,
@@ -133,6 +176,48 @@ class WorkspaceSession:
         assert_no_scope_escape(self.source)
         return digest_tree(self.source) == self.source_digest
 
+    def bind_confirmed_artifact(self, artifact: Path, artifact_digest: str) -> None:
+        """Bind publication to the exact staged artifact confirmed by Codex."""
+        if self.staging is None:
+            raise ValueError("a staged candidate is required for semantic binding")
+        artifact = artifact.resolve(strict=True)
+        try:
+            artifact.relative_to(self.staging.resolve(strict=True))
+        except ValueError as exc:
+            raise ValueError("confirmed artifact must be inside the staging workspace") from exc
+        if digest_tree(artifact) != artifact_digest:
+            raise CandidateChangedError("candidate digest changed before semantic binding")
+        self.confirmed_artifact_digest = artifact_digest
+
+    def diff(self, candidate: Path) -> WorkspaceDiff:
+        """Return deterministic file-level changes from the recorded source baseline."""
+        if self.source is None:
+            files = tuple(
+                path.relative_to(candidate).as_posix()
+                for path in sorted(candidate.rglob("*"))
+                if path.is_file()
+            )
+            return WorkspaceDiff(files, (), ())
+        return diff_trees(self.source, candidate)
+
+
+def diff_trees(source: Path, candidate: Path) -> WorkspaceDiff:
+    def inventory(root: Path) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for path in sorted(root.rglob("*")):
+            if path.is_file():
+                relative = path.relative_to(root).as_posix()
+                result[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return result
+
+    before = inventory(source)
+    after = inventory(candidate)
+    return WorkspaceDiff(
+        added=tuple(sorted(set(after) - set(before))),
+        modified=tuple(sorted(path for path in set(before) & set(after) if before[path] != after[path])),
+        deleted=tuple(sorted(set(before) - set(after))),
+    )
+
 
 def publish_atomic(session: WorkspaceSession, gate: GateResult) -> PublishResult:
     if not (gate.verdict is GateVerdict.PASS and gate.outcome is GateOutcome.READY_TO_PUBLISH and gate.publish_authorized):
@@ -142,11 +227,16 @@ def publish_atomic(session: WorkspaceSession, gate: GateResult) -> PublishResult
     staging = session.staging.resolve()
     target = next((p for p in staging.iterdir() if p.is_dir()), staging)
     candidate_digest = digest_tree(target)
+    if session.confirmed_artifact_digest is None:
+        raise PublishNotAuthorized("staged candidate is not bound to a semantic confirmation")
+    if candidate_digest != session.confirmed_artifact_digest:
+        raise CandidateChangedError("candidate digest changed after semantic confirmation")
     published = staging.parent / (session.source.name if session.source is not None else target.name)
     if not _same_filesystem(staging, published.parent):
         raise CrossFilesystemPublishError("staging and target must share a filesystem")
     if session.source is not None and not session.verify_source_unchanged():
         raise SourceChangedError("source changed after staging")
+    workspace_diff = session.diff(target)
     backup = published.parent / (published.name + ".backup") if published.exists() else None
     moved_backup = False
     try:
@@ -161,7 +251,16 @@ def publish_atomic(session: WorkspaceSession, gate: GateResult) -> PublishResult
         manifest = build_artifact_manifest(published, session.intent, session.source_digest)
         if manifest.content_digest != candidate_digest:
             raise ValueError("published candidate digest mismatch")
-        return PublishResult(published, backup if moved_backup else None, False)
+        return PublishResult(
+            published,
+            backup if moved_backup else None,
+            False,
+            session.source_digest,
+            candidate_digest,
+            manifest.content_digest,
+            workspace_diff,
+            "PUBLISHED",
+        )
     except Exception as exc:
         try:
             if published.exists() and published != backup:
@@ -169,8 +268,35 @@ def publish_atomic(session: WorkspaceSession, gate: GateResult) -> PublishResult
             if moved_backup and backup and backup.exists():
                 os.replace(str(backup), str(published))
         except Exception as restore_exc:
-            raise PublishRecoveryError("publication and recovery failed") from restore_exc
-        raise PublishRecoveryError("publication failed; original restored") from exc
+            result = PublishResult(
+                published,
+                backup if moved_backup else None,
+                False,
+                session.source_digest,
+                candidate_digest,
+                _digest_if_loadable(published),
+                workspace_diff,
+                "RECOVERY_FAILED",
+            )
+            raise PublishRecoveryError("publication and recovery failed", result) from restore_exc
+        result = PublishResult(
+            published,
+            backup if moved_backup else None,
+            True,
+            session.source_digest,
+            candidate_digest,
+            _digest_if_loadable(published),
+            workspace_diff,
+            "RECOVERED",
+        )
+        raise PublishRecoveryError("publication failed; original restored", result) from exc
+
+
+def _digest_if_loadable(path: Path) -> str | None:
+    try:
+        return digest_tree(path) if path.is_dir() else None
+    except (OSError, ValueError):
+        return None
 
 
 def _remove_exact(path: Path, parent: Path) -> None:

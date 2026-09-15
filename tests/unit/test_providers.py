@@ -9,6 +9,7 @@ from engine.providers import (
     CREATE_CANDIDATE,
     GOVERN_AGENT_INSTRUCTIONS,
     ProviderGateway,
+    provider_result_to_check_result,
     normalize_findings,
     normalize_provider_result,
 )
@@ -45,20 +46,19 @@ def test_gateway_invokes_adapter_without_host_specific_arguments() -> None:
     assert result.findings == ("finding",)
 
 
-def test_formal_run_skips_unpinned_provider_and_uses_internal_fallback() -> None:
+def test_formal_run_skips_unpinned_provider_without_fabricating_fallback() -> None:
     adapter = provider(revision=None)
     result = ProviderGateway([adapter]).invoke(AUDIT_SKILL, {}, formal_run=True)
-    assert result.provider_id == "internal.audit.v1"
-    assert result.fallback_used is True
-    assert result.provider_status is ProviderStatus.AVAILABLE
+    assert result.provider_status is ProviderStatus.UNAVAILABLE
+    assert result.fallback_used is False
 
 
 @pytest.mark.parametrize("status", [ProviderStatus.UNAVAILABLE, ProviderStatus.INVALID_OUTPUT, ProviderStatus.TIMEOUT, ProviderStatus.INCOMPATIBLE])
-def test_external_failure_uses_internal_fallback(status: ProviderStatus) -> None:
+def test_external_failure_is_reported_as_optional_unavailable(status: ProviderStatus) -> None:
     adapter = provider(status=status)
     result = ProviderGateway([adapter]).invoke(AUDIT_SKILL, {}, formal_run=False)
-    assert result.fallback_used is True
-    assert result.provider_id == "internal.audit.v1"
+    assert result.fallback_used is False
+    assert result.provider_status is ProviderStatus.UNAVAILABLE
 
 
 def test_provider_result_normalization_rejects_final_authority_fields() -> None:
@@ -76,16 +76,13 @@ def test_provider_result_normalization_rejects_final_authority_fields() -> None:
         })
 
 
-@pytest.mark.parametrize("capability,provider_id", [
-    (CREATE_CANDIDATE, "internal.create.v1"),
-    (AUDIT_SKILL, "internal.audit.v1"),
-    (GOVERN_AGENT_INSTRUCTIONS, "internal.agents-governance.v1"),
-    (CHECK_SKILL_CONFORMANCE, "internal.structure-validator.v1"),
+@pytest.mark.parametrize("capability", [
+    CREATE_CANDIDATE, AUDIT_SKILL, GOVERN_AGENT_INSTRUCTIONS, CHECK_SKILL_CONFORMANCE,
 ])
-def test_every_capability_has_internal_fallback(capability: str, provider_id: str) -> None:
+def test_every_provider_capability_is_optional(capability: str) -> None:
     result = ProviderGateway().invoke(capability, {}, formal_run=True)
-    assert result.provider_id == provider_id
-    assert result.fallback_used is True
+    assert result.provider_status is ProviderStatus.UNAVAILABLE
+    assert result.fallback_used is False
 
 
 def test_identity_does_not_change_normalized_findings() -> None:
@@ -98,14 +95,14 @@ def test_identity_does_not_change_normalized_findings() -> None:
 def test_formal_run_treats_blank_revision_as_unpinned(revision: str) -> None:
     adapter = provider(revision=revision)
     result = ProviderGateway([adapter]).invoke(AUDIT_SKILL, {}, formal_run=True)
-    assert result.provider_id == "internal.audit.v1"
+    assert result.provider_status is ProviderStatus.UNAVAILABLE
 
 
 @pytest.mark.parametrize("source_identity", [None, "", "   ", "\t\n"])
 def test_formal_run_treats_blank_source_identity_as_unpinned(source_identity: str | None) -> None:
     adapter = provider(source_identity=source_identity)
     result = ProviderGateway([adapter]).invoke(AUDIT_SKILL, {}, formal_run=True)
-    assert result.provider_id == "internal.audit.v1"
+    assert result.provider_status is ProviderStatus.UNAVAILABLE
 
 
 def test_gateway_marks_fallback_used_even_when_fallback_result_does_not() -> None:
@@ -129,13 +126,23 @@ def test_gateway_accepts_explicit_empty_fallback_as_optional() -> None:
     assert result.limitations
 
 
-def test_custom_fallback_override_preserves_other_internal_fallbacks() -> None:
+def test_custom_fallback_override_does_not_create_other_fallbacks() -> None:
     custom = provider("custom-fallback")
     result = ProviderGateway(fallbacks={AUDIT_SKILL: custom}).invoke(
         CREATE_CANDIDATE, {}, formal_run=True,
     )
-    assert result.provider_id == "internal.create.v1"
-    assert result.fallback_used is True
+    assert result.provider_status is ProviderStatus.UNAVAILABLE
+    assert result.fallback_used is False
+
+
+def test_provider_evidence_is_never_marked_deterministic() -> None:
+    result = ProviderResult(
+        "external", AUDIT_SKILL, ProviderStatus.AVAILABLE,
+        (), (), ("review ran",), (), False,
+    )
+    check = provider_result_to_check_result(result, subject="demo")
+    assert check.deterministic is False
+    assert check.reproducible is False
 
 
 def test_fallback_invoke_error_returns_optional_unavailable_result() -> None:

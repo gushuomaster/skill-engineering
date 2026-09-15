@@ -17,7 +17,7 @@ def _evidence() -> tuple[CheckResult, ...]:
 
 def _context() -> GateContext:
     decision = DecisionRecord(Intent.FIX, PrimaryIssueClass.IMPLEMENTATION_DEFECT, (ControlGap.IMPLEMENTATION_GAP,), RegressionDisposition.REQUIRED, "known defect", (), (), (), None)
-    return GateContext(Intent.FIX, LifecycleState.VALIDATED, True, True, True, decision)
+    return GateContext(Intent.FIX, LifecycleState.VALIDATED, True, True, True, decision, True)
 
 
 def test_required_regression_failure_blocks_gate() -> None:

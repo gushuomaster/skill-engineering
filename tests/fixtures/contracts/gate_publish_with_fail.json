@@ -1,1 +1,1 @@
-{"verdict":"FAIL","outcome":"REMEDIATION_REQUIRED","blocking_findings":["B04"],"warnings":[],"required_checks_summary":"A required check failed.","evidence_summary":"Evidence complete.","publish_authorized":true,"policy_version":"v1"}
+{"verdict":"FAIL","outcome":"REMEDIATION_REQUIRED","blocking_findings":["B04"],"warnings":[],"required_checks_summary":"A required check failed.","evidence_summary":"Evidence complete.","semantic_confirmed":false,"publish_authorized":true,"policy_version":"v1"}

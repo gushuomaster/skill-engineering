@@ -1,4 +1,4 @@
-"""Invocation-neutral provider ports, normalization, and internal fallbacks."""
+"""Invocation-neutral ports and normalization for optional Provider advice."""
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -103,89 +103,25 @@ def provider_result_to_check_result(
         evidence.append(f"fallback used: {normalized.provider_id}")
     if not evidence:
         evidence.append("provider returned no evidence")
-    status = CheckStatus.PASS
-    if (
-        normalized.provider_status is not ProviderStatus.AVAILABLE
-        or normalized.findings
-        or normalized.limitations
-    ):
+    if normalized.provider_status in _FAILURE_STATUSES:
+        status = CheckStatus.NOT_EXECUTED
+    elif normalized.provider_status is ProviderStatus.DEGRADED or normalized.findings or normalized.limitations:
         status = CheckStatus.WARN
+    else:
+        status = CheckStatus.PASS
     return CheckResult(
         check_id=f"provider.{normalized.capability.lower()}",
         source=f"provider:{normalized.provider_id}",
         subject=subject,
         required=False,
         status=status,
-        deterministic=True,
-        reproducible=True,
+        deterministic=False,
+        reproducible=False,
         confidence=1.0,
         evidence=tuple(evidence),
         remediation_stage=LifecycleState.VALIDATED,
         artifact_reference=subject,
     )
-
-
-class InternalFallbackProvider:
-    """Minimal deterministic V1 implementation for one required capability."""
-
-    def __init__(self, capability: str, provider_id: str) -> None:
-        if capability not in CAPABILITIES:
-            raise ValueError(f"unknown provider capability: {capability}")
-        self.descriptor = ProviderDescriptor(
-            provider_id,
-            "skill-engineering/internal",
-            "v1",
-            capability,
-            ProviderStatus.AVAILABLE,
-            "internal",
-            (),
-            None,
-        )
-
-    def invoke(self, capability: str, request: dict[str, object]) -> ProviderResult:
-        if capability != self.descriptor.capability:
-            raise ValueError("fallback capability does not match request")
-        subject = request.get("subject")
-        subject_note = f" for {subject}" if isinstance(subject, str) and subject else ""
-        if capability == CREATE_CANDIDATE:
-            candidate_changes = ("minimal complete Skill candidate structure",)
-            evidence = ("internal candidate creator v1",)
-            findings: tuple[str, ...] = ()
-        elif capability == AUDIT_SKILL:
-            candidate_changes = ()
-            findings = ()
-            evidence = (f"internal structure and governance audit{subject_note}",)
-        elif capability == GOVERN_AGENT_INSTRUCTIONS:
-            candidate_changes = ()
-            findings = ()
-            evidence = ("AGENTS/CLAUDE scope and duplicate-source checks",)
-        else:
-            candidate_changes = ()
-            findings = ()
-            evidence = ("deterministic Skill structure conformance",)
-        return ProviderResult(
-            self.descriptor.provider_id,
-            capability,
-            ProviderStatus.AVAILABLE,
-            findings,
-            candidate_changes,
-            evidence,
-            (),
-            True,
-        )
-
-
-def internal_fallbacks() -> dict[str, InternalFallbackProvider]:
-    return {
-        CREATE_CANDIDATE: InternalFallbackProvider(CREATE_CANDIDATE, "internal.create.v1"),
-        AUDIT_SKILL: InternalFallbackProvider(AUDIT_SKILL, "internal.audit.v1"),
-        GOVERN_AGENT_INSTRUCTIONS: InternalFallbackProvider(
-            GOVERN_AGENT_INSTRUCTIONS, "internal.agents-governance.v1"
-        ),
-        CHECK_SKILL_CONFORMANCE: InternalFallbackProvider(
-            CHECK_SKILL_CONFORMANCE, "internal.structure-validator.v1"
-        ),
-    }
 
 
 class ProviderGateway:
@@ -197,7 +133,7 @@ class ProviderGateway:
         fallbacks: Mapping[str, ProviderAdapter | None] | None = None,
     ) -> None:
         self._adapters: list[ProviderAdapter] = []
-        self._fallbacks: dict[str, ProviderAdapter | None] = dict(internal_fallbacks())
+        self._fallbacks: dict[str, ProviderAdapter | None] = dict.fromkeys(CAPABILITIES)
         if fallbacks is not None:
             self._fallbacks.update(fallbacks)
         for adapter in adapters or ():
@@ -300,10 +236,8 @@ __all__ = [
     "CHECK_SKILL_CONFORMANCE",
     "CREATE_CANDIDATE",
     "GOVERN_AGENT_INSTRUCTIONS",
-    "InternalFallbackProvider",
     "ProviderAdapter",
     "ProviderGateway",
-    "internal_fallbacks",
     "normalize_provider_result",
     "normalize_findings",
     "provider_result_to_check_result",

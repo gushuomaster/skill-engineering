@@ -54,6 +54,7 @@ def _context() -> GateContext:
         candidate_requires_publish=True,
         workspace_publishable=True,
         decision=None,
+        semantic_confirmed=True,
     )
 
 

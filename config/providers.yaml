@@ -8,7 +8,7 @@ providers:
     compatibility:
       status: unverified
     invocation_adapter: unavailable
-    fallback_provider: internal.create.v1
+    fallback_provider: null
   - provider_id: mblode.agent-skills-creator
     capability: AUDIT_SKILL
     source_identity: mblode/agent-skills
@@ -18,7 +18,7 @@ providers:
     compatibility:
       status: unverified
     invocation_adapter: unavailable
-    fallback_provider: internal.audit.v1
+    fallback_provider: null
   - provider_id: mblode.agents-md
     capability: GOVERN_AGENT_INSTRUCTIONS
     source_identity: mblode/agent-skills
@@ -28,7 +28,7 @@ providers:
     compatibility:
       status: unverified
     invocation_adapter: unavailable
-    fallback_provider: internal.agents-governance.v1
+    fallback_provider: null
   - provider_id: validate-skills
     capability: CHECK_SKILL_CONFORMANCE
     source_identity: validate-skills/validate-skills
@@ -38,4 +38,4 @@ providers:
     compatibility:
       status: unverified
     invocation_adapter: unavailable
-    fallback_provider: internal.structure-validator.v1
+    fallback_provider: null

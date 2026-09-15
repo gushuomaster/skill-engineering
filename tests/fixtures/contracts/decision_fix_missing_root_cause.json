@@ -1,1 +1,1 @@
-{"intent":"FIX","primary_issue_class":"IMPLEMENTATION_DEFECT","control_gaps":["IMPLEMENTATION_GAP"],"regression_disposition":"REQUIRED","root_cause":null,"evidence_limitations":[],"selected_mechanisms":["repair"],"rejected_mechanisms":[],"prompt_rule_justification":null}
+{"intent":"FIX","primary_issue_class":"IMPLEMENTATION_DEFECT","control_gaps":["IMPLEMENTATION_GAP"],"regression_disposition":"REQUIRED","root_cause":null,"evidence_limitations":[],"selected_mechanisms":["repair"],"rejected_mechanisms":[],"prompt_rule_justification":null,"decided_by":"CODEX"}

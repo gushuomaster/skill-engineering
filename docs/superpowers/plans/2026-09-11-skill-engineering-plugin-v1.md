@@ -1,5 +1,7 @@
 # Skill Engineering Plugin V1 Implementation Plan
 
+> Historical plan, superseded on 2026-09-15 by [the architecture correction](../../architecture-correction-2026-09-15.md). Do not implement its assignments of semantic decisions or internal Provider fallbacks.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the frozen V1 Skill Engineering Plugin as a minimal, independently testable governance pipeline that safely creates, modifies, fixes, audits, validates, and publishes complete Skills.

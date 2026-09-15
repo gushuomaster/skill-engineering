@@ -24,41 +24,69 @@ class GovernanceDecision:
     blocking: bool = False
     signals: tuple[str, ...] = ()
     limitations: tuple[str, ...] = ()
+    decided_by: str = "CODEX"
 
 
-def govern_findings(findings: tuple[object, ...], mechanisms: tuple[str, ...]) -> tuple[GovernanceDecision, ...]:
-    decisions: list[GovernanceDecision] = []
-    for finding in findings:
-        raw_rationale = finding.rationale
-        if not isinstance(raw_rationale, str) or not raw_rationale.strip():
-            raise ValueError(f"finding {finding.finding_id} requires governance rationale")
-        raw_refs = tuple(finding.evidence_refs)
-        if not raw_refs or any(not isinstance(ref, str) or not ref.strip() for ref in raw_refs):
-            raise ValueError(f"finding {finding.finding_id} requires evidence references")
-        rationale = raw_rationale.strip()
-        refs = tuple(ref.strip() for ref in raw_refs)
-        action = finding.candidate_action
-        if not isinstance(action, GovernanceAction):
-            action = GovernanceAction.KEEP
-        signals = set(finding.signals)
-        blocking = bool(
-            action in {GovernanceAction.DELETE, GovernanceAction.MERGE}
-            and "conflict" in signals
-            and any("regression" in mechanism.lower() or "validator" in mechanism.lower() for mechanism in mechanisms)
-        )
-        decisions.append(
+def validate_governance_decisions(
+    findings: tuple[object, ...],
+    decisions: tuple[GovernanceDecision, ...],
+) -> tuple[GovernanceDecision, ...]:
+    """Validate explicit Codex decisions; never derive actions from detector signals."""
+    finding_by_id = {finding.finding_id: finding for finding in findings}
+    if len(finding_by_id) != len(findings):
+        raise ValueError("rule findings must have unique identifiers")
+    decision_by_id = {decision.finding_id: decision for decision in decisions}
+    if len(decision_by_id) != len(decisions):
+        raise ValueError("governance decisions must have unique finding identifiers")
+    unknown = sorted(set(decision_by_id) - set(finding_by_id))
+    if unknown:
+        raise ValueError("governance decisions reference unknown findings: " + ", ".join(unknown))
+    validated: list[GovernanceDecision] = []
+    for decision in decisions:
+        if decision.decided_by != "CODEX":
+            raise ValueError(f"decision {decision.finding_id} must be authored by Codex")
+        if not isinstance(decision.action, GovernanceAction):
+            raise ValueError(f"decision {decision.finding_id} requires a valid action")
+        if not isinstance(decision.rationale, str) or not decision.rationale.strip():
+            raise ValueError(f"decision {decision.finding_id} requires Codex rationale")
+        if not decision.evidence_refs or any(not ref.strip() for ref in decision.evidence_refs):
+            raise ValueError(f"decision {decision.finding_id} requires evidence references")
+        finding = finding_by_id[decision.finding_id]
+        validated.append(
             GovernanceDecision(
-                finding.finding_id,
-                action,
-                rationale,
-                refs,
-                finding.candidate_target_layer,
-                blocking,
+                decision.finding_id,
+                decision.action,
+                decision.rationale.strip(),
+                tuple(ref.strip() for ref in decision.evidence_refs),
+                decision.target_layer,
+                decision.blocking,
                 tuple(finding.signals),
                 tuple(finding.limitations),
+                "CODEX",
             )
         )
-    return tuple(decisions)
+    return tuple(validated)
+
+
+def signal_evidence(findings: tuple[object, ...]) -> tuple[CheckResult, ...]:
+    """Project detector output as advisory evidence without governance actions."""
+    evidence: list[CheckResult] = []
+    for finding in findings:
+        status = CheckStatus.SKIP if finding.confidence == 0 else CheckStatus.WARN
+        evidence.append(CheckResult(
+            check_id=f"rule-signal.{finding.finding_id}",
+            source="rule_bloat_detector",
+            subject=",".join(finding.evidence_refs)[:200] or finding.finding_id,
+            required=False,
+            status=status,
+            deterministic=True,
+            reproducible=True,
+            confidence=finding.confidence,
+            evidence=(finding.rationale, *finding.signals, *finding.limitations),
+            remediation_stage=LifecycleState.AUDITED,
+            artifact_reference=None,
+        ))
+    return tuple(evidence)
 
 
 def governance_evidence(decisions: tuple[GovernanceDecision, ...]) -> tuple[CheckResult, ...]:

@@ -1,1 +1,1 @@
-{"intent":"CREATE","primary_issue_class":"NO_DEFECT","control_gaps":["NONE"],"regression_disposition":"NOT_APPLICABLE","root_cause":null,"evidence_limitations":[],"selected_mechanisms":["scaffold"],"rejected_mechanisms":[],"prompt_rule_justification":null}
+{"intent":"CREATE","primary_issue_class":"NO_DEFECT","control_gaps":["NONE"],"regression_disposition":"NOT_APPLICABLE","root_cause":null,"evidence_limitations":[],"selected_mechanisms":["scaffold"],"rejected_mechanisms":[],"prompt_rule_justification":null,"decided_by":"CODEX"}

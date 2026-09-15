@@ -50,6 +50,8 @@ def validate_classification(record: DecisionRecord) -> None:
     """Ensure a diagnostic record retains the frozen classification semantics."""
     if not isinstance(record.intent, Intent):
         raise InvalidDecisionRecord("intent must be an Intent")
+    if record.decided_by != "CODEX":
+        raise InvalidDecisionRecord("semantic decisions must be authored by Codex")
     if not isinstance(record.primary_issue_class, PrimaryIssueClass):
         raise InvalidDecisionRecord("primary issue class must be a PrimaryIssueClass")
     if not isinstance(record.regression_disposition, RegressionDisposition):

@@ -1,32 +1,37 @@
-"""Minimal internal-only governance loop for Skill engineering."""
+"""Deterministic workspace, evidence, and release support for Codex Skill work."""
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
 from engine.diagnostics import validate_classification
+from engine.contracts import validate_contract
 from engine.evidence import EvidenceCollector
-from engine.mechanism_selection import select_mechanisms
+from engine.inventory import build_artifact_manifest
+from engine.mechanism_selection import validate_mechanism_selection
 from engine.models import (
     CheckResult,
     CheckStatus,
-    ControlGap,
     DecisionRecord,
     GateResult,
     Intent,
     LifecycleState,
     PrimaryIssueClass,
     RegressionDisposition,
+    SemanticConfirmation,
 )
-from engine.quality_gate import GateContext, adjudicate, load_gate_policy
 from engine.providers import AUDIT_SKILL, ProviderGateway, provider_result_to_check_result
-from engine.state_machine import TransitionContext, transition
-from engine.workspace import WorkspaceSession, publish_atomic
-from engine.inventory import build_artifact_manifest
+from engine.quality_gate import GateContext, adjudicate, load_gate_policy
 from engine.rule_bloat import detect_rule_bloat, extract_rule_units
-from engine.rule_governance import governance_evidence, govern_findings
+from engine.rule_governance import (
+    GovernanceDecision,
+    governance_evidence,
+    signal_evidence,
+    validate_governance_decisions,
+)
+from engine.state_machine import TransitionContext, transition
+from engine.workspace import PublishResult, WorkspaceDiff, WorkspaceSession, publish_atomic
 from validators.reference_integrity import validate_references
 from validators.skill_structure import validate_skill_structure
 
@@ -34,13 +39,19 @@ from validators.skill_structure import validate_skill_structure
 @dataclass(frozen=True)
 class EngineeringRequest:
     requirement: str
-    intent: Intent | None
+    intent: Intent
+    decision: DecisionRecord
     source: Path | None
+    candidate: Path | None
     failure_evidence: tuple[str, ...]
     authorized_to_modify: bool
     target_parent: Path
+    semantic_confirmation: SemanticConfirmation | None = None
+    governance_decisions: tuple[GovernanceDecision, ...] = ()
     project_policy: Path | None = None
     regression_runner: Callable[[Path], CheckResult] | None = None
+    behavioral_runner: Callable[[Path], CheckResult] | None = None
+    publish_requested: bool = False
 
 
 @dataclass(frozen=True)
@@ -49,15 +60,29 @@ class EngineeringOutcome:
     artifact_path: Path
     gate_result: GateResult
     minimal_blocking_findings: tuple[dict[str, str], ...]
+    workspace_diff: WorkspaceDiff
+    publication_session: WorkspaceSession | None
+    evidence: tuple[CheckResult, ...] = ()
 
 
 class PipelineBlockedError(RuntimeError):
-    def __init__(self, gate_result: GateResult) -> None:
+    def __init__(
+        self,
+        gate_result: GateResult,
+        artifact_path: Path | None = None,
+        workspace_diff: WorkspaceDiff | None = None,
+        evidence: tuple[CheckResult, ...] = (),
+    ) -> None:
         super().__init__("Skill engineering pipeline blocked by the Quality Gate")
         self.gate_result = gate_result
+        self.artifact_path = artifact_path
+        self.workspace_diff = workspace_diff
+        self.evidence = evidence
 
 
 class PipelineOrchestrator:
+    """Run deterministic stages around decisions and candidate content supplied by Codex."""
+
     def __init__(
         self,
         state_observer: Callable[[LifecycleState], None] | None = None,
@@ -72,315 +97,276 @@ class PipelineOrchestrator:
         if self._state_observer is not None:
             self._state_observer(state)
 
-    def _move(self, state: LifecycleState, target: LifecycleState, context: TransitionContext) -> LifecycleState:
-        state = transition(state, target, context)
+    def _move(
+        self,
+        state: LifecycleState,
+        target: LifecycleState,
+        request: EngineeringRequest,
+        session: WorkspaceSession,
+        *,
+        modification_needed: bool = False,
+    ) -> LifecycleState:
+        state = transition(
+            state,
+            target,
+            _context(request, session, modification_needed=modification_needed),
+        )
         self._record(state)
         return state
 
     def run(self, request: EngineeringRequest) -> EngineeringOutcome:
-        intent = request.intent or _detect_intent(request)
-        _validate_request(intent, request)
+        _validate_request(request)
+        decision = validate_mechanism_selection(request.decision)
         self.state_history.clear()
         self._record(LifecycleState.DISCOVERED)
-        session = _session_for(intent, request)
-        if intent in {Intent.CREATE, Intent.MODIFY, Intent.FIX} and not request.authorized_to_modify:
-            raise PipelineBlockedError(_blocked_gate(intent, request))
-        staging_allowed = request.authorized_to_modify and intent is not Intent.AUDIT_ONLY
-        if intent in {Intent.CREATE, Intent.MODIFY, Intent.FIX} and staging_allowed:
-            session.prepare(request.target_parent)
-            if intent in {Intent.MODIFY, Intent.FIX} and session.staging is not None:
-                renamed = session.staging.with_name("staged-skill")
-                session.staging.rename(renamed)
-                session.staging = renamed
-                skill_md = renamed / "SKILL.md"
-                if skill_md.is_file():
-                    text = skill_md.read_text(encoding="utf-8")
-                    text = re.sub(r"(?m)^name:\s*[^\r\n]+", "name: staged-skill", text, count=1)
-                    skill_md.write_text(text, encoding="utf-8")
-            state = self._move(
-                LifecycleState.DISCOVERED,
-                LifecycleState.STAGED,
-                _context(intent, request, staging_exists=session.staging is not None),
-            )
+        session = _session_for(request)
+        state = LifecycleState.DISCOVERED
+
+        if request.intent is Intent.AUDIT_ONLY:
+            artifact = request.source
+            state = self._move(state, LifecycleState.AUDITED, request, session)
+            state = self._move(state, LifecycleState.CLASSIFIED, request, session)
+            state = self._move(state, LifecycleState.MECHANISM_SELECTED, request, session)
+            state = self._move(state, LifecycleState.AUDITED, request, session)
+        elif request.intent is Intent.AUDIT_OPTIMIZE:
+            artifact = request.source
+            state = self._move(state, LifecycleState.AUDITED, request, session)
+            state = self._move(state, LifecycleState.CLASSIFIED, request, session)
+            state = self._move(state, LifecycleState.MECHANISM_SELECTED, request, session)
+            if request.candidate is not None:
+                artifact = session.stage_candidate(request.candidate, request.target_parent)
+                state = self._move(state, LifecycleState.STAGED, request, session, modification_needed=True)
+                state = self._move(state, LifecycleState.AUDITED, request, session, modification_needed=True)
+            else:
+                state = self._move(state, LifecycleState.AUDITED, request, session)
         else:
-            state = LifecycleState.DISCOVERED
+            artifact = session.stage_candidate(request.candidate, request.target_parent)
+            state = self._move(state, LifecycleState.STAGED, request, session, modification_needed=True)
+            state = self._move(state, LifecycleState.CLASSIFIED, request, session, modification_needed=True)
+            state = self._move(state, LifecycleState.MECHANISM_SELECTED, request, session, modification_needed=True)
+            state = self._move(state, LifecycleState.AUDITED, request, session, modification_needed=True)
 
-        if intent is Intent.CREATE:
-            if session.staging is None:
-                gate = _blocked_gate(intent, request)
-                raise PipelineBlockedError(gate)
-            artifact = _write_internal_candidate(session.staging, request.requirement)
-        else:
-            artifact = session.staging if session.staging is not None else session.source
-
-        decision = _make_decision(intent, request)
-        if state is LifecycleState.DISCOVERED:
-            state = self._move(
-                state,
-                LifecycleState.AUDITED if intent is Intent.AUDIT_ONLY else LifecycleState.CLASSIFIED,
-                _context(intent, request, staging_exists=session.staging is not None),
-            )
-        elif state is LifecycleState.STAGED:
-            state = self._move(
-                state, LifecycleState.CLASSIFIED,
-                _context(intent, request, staging_exists=session.staging is not None),
-            )
-        if intent is Intent.AUDIT_ONLY:
-            state = self._move(
-                state,
-                LifecycleState.CLASSIFIED,
-                _context(intent, request, staging_exists=False),
-            )
-        validate_classification(decision)
-        decision = select_mechanisms(decision)
-        state = self._move(state, LifecycleState.MECHANISM_SELECTED,
-                           _context(intent, request, staging_exists=session.staging is not None))
-        if intent is Intent.AUDIT_ONLY:
-            state = self._move(state, LifecycleState.AUDITED,
-                               _context(intent, request, staging_exists=False))
-
-        effective_policy = load_gate_policy(request.project_policy)
-        optimization_needed = intent is Intent.AUDIT_OPTIMIZE and bool(request.failure_evidence)
-        gate, state = self._audit_and_gate(
-            intent, request, session, artifact, decision, state, effective_policy,
-            defer_gate_transition=optimization_needed,
-        )
-        if intent is Intent.AUDIT_OPTIMIZE and optimization_needed and request.authorized_to_modify:
-            session.prepare_optimization(
-                request.target_parent,
-                modification_needed=True,
-                authorized_to_modify=request.authorized_to_modify,
-            )
-            if session.staging is not None:
-                renamed = session.staging.with_name("staged-skill")
-                session.staging.rename(renamed)
-                session.staging = renamed
-                skill_md = renamed / "SKILL.md"
-                if skill_md.is_file():
-                    text = skill_md.read_text(encoding="utf-8")
-                    text = re.sub(r"(?m)^name:\s*[^\r\n]+", "name: staged-skill", text, count=1)
-                    skill_md.write_text(text, encoding="utf-8")
-            artifact = session.staging
-            state = self._move(
-                state,
-                LifecycleState.STAGED,
-                _context(intent, request, staging_exists=True, modification_needed=True),
-            )
-            state = self._move(
-                state,
-                LifecycleState.CLASSIFIED,
-                _context(intent, request, staging_exists=True, modification_needed=True),
-            )
-            state = self._move(
-                state,
-                LifecycleState.MECHANISM_SELECTED,
-                _context(intent, request, staging_exists=True, modification_needed=True),
-            )
-            gate, state = self._audit_and_gate(
-                intent, request, session, artifact, decision, state, effective_policy,
-                candidate_requires_publish=True,
-            )
-
-        if gate.verdict.value == "FAIL":
-            if intent is Intent.AUDIT_ONLY:
-                from engine.output import project_audit_failure
-
-                return project_audit_failure(request.source, gate)
-            raise PipelineBlockedError(gate)
-        if gate.publish_authorized and gate.outcome.value == "READY_TO_PUBLISH":
-            publish_atomic(session, gate)
-            self._record(LifecycleState.PUBLISHED)
-        from engine.output import project_validated
-
-        output_path = (
-            request.source
-            if intent is Intent.AUDIT_ONLY
-            or decision.primary_issue_class is PrimaryIssueClass.TASK_LOCAL_PREFERENCE
-            else (artifact or request.source)
-        )
-        return project_validated(output_path, gate)
-
-    def _audit_and_gate(
-        self,
-        intent: Intent,
-        request: EngineeringRequest,
-        session: WorkspaceSession,
-        artifact: Path | None,
-        decision: DecisionRecord,
-        state: LifecycleState,
-        policy: dict[str, object],
-        *,
-        candidate_requires_publish: bool | None = None,
-        defer_gate_transition: bool = False,
-    ) -> tuple[GateResult, LifecycleState]:
         if artifact is None:
-            gate = _blocked_gate(intent, request, decision=decision, policy=policy)
-            return gate, state
-        manifest = build_artifact_manifest(artifact, intent, session.source_digest)
+            raise ValueError("artifact is required")
+        manifest = build_artifact_manifest(artifact, request.intent, session.source_digest)
         evidence = validate_skill_structure(manifest) + validate_references(manifest)
+        if request.behavioral_runner is not None:
+            evidence += (request.behavioral_runner(artifact),)
+        elif request.intent is Intent.CREATE:
+            evidence += (_missing_behavioral_check(manifest.skill_name),)
         if decision.regression_disposition is RegressionDisposition.REQUIRED and request.regression_runner is not None:
             evidence += (request.regression_runner(artifact),)
-        rule_units = extract_rule_units(artifact)
-        rule_findings = detect_rule_bloat(rule_units, history=None)
-        governance = govern_findings(rule_findings, decision.selected_mechanisms)
-        evidence += governance_evidence(governance)
+        elif decision.regression_disposition is RegressionDisposition.REQUIRED:
+            evidence += (_missing_regression_check(manifest.skill_name),)
+        rule_findings = detect_rule_bloat(extract_rule_units(artifact), history=None)
+        evidence += signal_evidence(rule_findings)
+        validated_governance = validate_governance_decisions(rule_findings, request.governance_decisions)
+        evidence += governance_evidence(validated_governance)
+        if request.candidate is not None:
+            evidence += (_governance_coverage(rule_findings, validated_governance, manifest.skill_name),)
         if decision.primary_issue_class is PrimaryIssueClass.INSUFFICIENT_EVIDENCE:
             evidence += (_diagnostic_failure(manifest.skill_name),)
+
         collector = EvidenceCollector()
         for result in evidence:
             collector.add(result)
         if self._provider_gateway is not None:
             provider_result = self._provider_gateway.invoke(
-                AUDIT_SKILL,
-                {"subject": manifest.skill_name},
-                formal_run=True,
+                AUDIT_SKILL, {"subject": manifest.skill_name}, formal_run=True
             )
-            collector.add(
-                provider_result_to_check_result(
-                    provider_result,
-                    subject=manifest.skill_name,
-                )
-            )
+            collector.add(provider_result_to_check_result(provider_result, subject=manifest.skill_name))
         evidence = collector.snapshot()
         state = self._move(
             state,
-            LifecycleState.AUDITED,
-            _context(intent, request, staging_exists=session.staging is not None),
-        ) if state is not LifecycleState.AUDITED else state
-        if defer_gate_transition:
-            return _deferred_adjudication(intent, request, decision, evidence, policy), state
-        state = self._move(
-            state, LifecycleState.VALIDATED,
-            _context(intent, request, staging_exists=session.staging is not None),
+            LifecycleState.VALIDATED,
+            request,
+            session,
+            modification_needed=request.candidate is not None,
         )
-        publish = (
-            candidate_requires_publish
-            if candidate_requires_publish is not None
-            else intent in {Intent.CREATE, Intent.MODIFY, Intent.FIX}
-            and request.authorized_to_modify
-            and decision.primary_issue_class is not PrimaryIssueClass.TASK_LOCAL_PREFERENCE
+        semantic_confirmed = _semantic_confirmation_matches(
+            request.semantic_confirmation, manifest.content_digest
         )
+        candidate_requires_publish = request.candidate is not None
         gate = adjudicate(
             GateContext(
-                intent=intent,
+                intent=request.intent,
                 state=LifecycleState.VALIDATED,
                 authorized_to_modify=request.authorized_to_modify,
-                candidate_requires_publish=publish,
+                candidate_requires_publish=candidate_requires_publish,
                 workspace_publishable=session.staging is not None,
                 decision=decision,
+                semantic_confirmed=semantic_confirmed,
+                publish_requested=request.publish_requested,
             ),
             evidence,
-            policy=policy,
+            policy=load_gate_policy(request.project_policy),
         )
         target = LifecycleState.GATE_PASSED if gate.verdict.value == "PASS" else LifecycleState.GATE_FAILED
-        state = self._move(
-            state,
-            target,
-            _context(
-                intent,
-                request,
-                staging_exists=session.staging is not None,
-                modification_needed=publish,
-            ),
+        self._move(state, target, request, session, modification_needed=candidate_requires_publish)
+        workspace_diff = session.diff(artifact)
+
+        if gate.verdict.value == "FAIL":
+            if request.intent is Intent.AUDIT_ONLY:
+                return _audit_failure(request.source, gate, workspace_diff, evidence)
+            raise PipelineBlockedError(gate, artifact, workspace_diff, evidence)
+        if session.staging is not None:
+            session.bind_confirmed_artifact(artifact, manifest.content_digest)
+        return EngineeringOutcome(
+            "Validated Complete Skill",
+            artifact,
+            gate,
+            (),
+            workspace_diff,
+            session if gate.publish_authorized else None,
+            evidence,
         )
-        return gate, state
 
 
-def _context(intent: Intent, request: EngineeringRequest, *, staging_exists: bool, modification_needed: bool = False) -> TransitionContext:
+def publish(outcome: EngineeringOutcome) -> PublishResult:
+    """Perform the separately requested atomic publication of a ready outcome."""
+    if outcome.publication_session is None:
+        raise ValueError("outcome has no publication-ready workspace")
+    return publish_atomic(outcome.publication_session, outcome.gate_result)
+
+
+def _validate_request(request: EngineeringRequest) -> None:
+    if not isinstance(request.intent, Intent):
+        raise ValueError("intent must be explicitly supplied by Codex")
+    if request.decision.intent is not request.intent:
+        raise ValueError("DecisionRecord intent must match the explicit request intent")
+    validate_classification(request.decision)
+    if not request.requirement.strip():
+        raise ValueError("requirement must be nonblank")
+    if request.intent is Intent.CREATE:
+        if request.source is not None:
+            raise ValueError("Create does not accept a source Skill")
+    elif request.source is None:
+        raise ValueError(f"{request.intent.value} requires a source Skill")
+    if request.intent is Intent.AUDIT_ONLY and request.candidate is not None:
+        raise ValueError("Audit Only cannot accept a candidate")
+    if request.intent in {Intent.CREATE, Intent.MODIFY, Intent.FIX}:
+        if request.candidate is None:
+            raise ValueError("Codex must supply a complete candidate for this mode")
+        if not request.authorized_to_modify:
+            raise ValueError("candidate staging requires modification authorization")
+    if request.intent is Intent.AUDIT_OPTIMIZE and request.candidate is not None and not request.authorized_to_modify:
+        raise ValueError("Audit + Optimize candidate staging requires modification authorization")
+    if not request.target_parent.exists() or not request.target_parent.is_dir():
+        raise ValueError("target parent must be an existing directory")
+    if request.candidate is not None:
+        published_name = (
+            request.candidate.name if request.intent is Intent.CREATE else request.source.name
+        )
+        publish_target = request.target_parent.resolve(strict=False) / published_name
+        if request.candidate.resolve(strict=False) == publish_target:
+            raise ValueError("candidate must be outside its publication destination")
+
+
+def _session_for(request: EngineeringRequest) -> WorkspaceSession:
+    if request.intent is Intent.CREATE:
+        return WorkspaceSession.for_create()
+    return WorkspaceSession.for_existing(request.intent, request.source)
+
+
+def _context(
+    request: EngineeringRequest,
+    session: WorkspaceSession,
+    *,
+    modification_needed: bool = False,
+) -> TransitionContext:
     return TransitionContext(
-        intent=intent,
+        intent=request.intent,
         authorized_to_modify=request.authorized_to_modify,
         defect_found=bool(request.failure_evidence),
-        staging_exists=staging_exists,
+        staging_exists=session.staging is not None,
         audit_cycle=0,
         validation_cycle=0,
         modification_needed=modification_needed,
     )
 
 
-def _session_for(intent: Intent, request: EngineeringRequest) -> WorkspaceSession:
-    if intent is Intent.CREATE:
-        return WorkspaceSession.for_create()
-    return WorkspaceSession.for_existing(intent, request.source)
+def _semantic_confirmation_matches(
+    confirmation: SemanticConfirmation | None, artifact_digest: str
+) -> bool:
+    if confirmation is None:
+        return False
+    try:
+        validate_contract("semantic-confirmation", asdict(confirmation))
+    except Exception:
+        return False
+    return confirmation.artifact_digest == artifact_digest
 
 
-def _validate_request(intent: Intent, request: EngineeringRequest) -> None:
-    if intent is Intent.CREATE:
-        if request.source is not None:
-            raise ValueError("Create does not accept a source Skill")
-    elif request.source is None:
-        raise ValueError(f"{intent.value} requires a source Skill")
-    if not request.target_parent.exists() or not request.target_parent.is_dir():
-        raise ValueError("target parent must be an existing directory")
-
-
-def _detect_intent(request: EngineeringRequest) -> Intent:
-    text = request.requirement.lower()
-    if any(token in text for token in ("audit + optimize", "audit and optimize", "optimize")) and request.source:
-        return Intent.AUDIT_OPTIMIZE
-    if request.source is None:
-        return Intent.CREATE
-    if request.failure_evidence or any(token in text for token in ("fix", "repair", "修复", "修理")):
-        return Intent.FIX
-    if any(token in text for token in ("modify", "change", "update", "改", "修改")):
-        return Intent.MODIFY
-    return Intent.AUDIT_ONLY
-
-
-def _make_decision(intent: Intent, request: EngineeringRequest) -> DecisionRecord:
-    requirement = request.requirement.lower()
-    if intent is Intent.FIX and not request.failure_evidence:
-        return DecisionRecord(intent, PrimaryIssueClass.INSUFFICIENT_EVIDENCE, (ControlGap.NONE,), RegressionDisposition.NOT_APPLICABLE, None, ("no failure evidence was supplied",), (), (), None)
-    if intent is Intent.AUDIT_OPTIMIZE and request.failure_evidence:
-        return DecisionRecord(intent, PrimaryIssueClass.CAPABILITY_INVARIANT_CHANGE, (ControlGap.IMPLEMENTATION_GAP,), RegressionDisposition.NOT_APPLICABLE, None, (), (), (), None)
-    if request.failure_evidence:
-        primary = PrimaryIssueClass.IMPLEMENTATION_DEFECT
-        root = "; ".join(request.failure_evidence)
-        return DecisionRecord(intent, primary, (ControlGap.IMPLEMENTATION_GAP,), RegressionDisposition.REQUIRED, root, (), (), (), None)
-    if intent is Intent.AUDIT_OPTIMIZE and any(token in requirement for token in ("optimize", "优化")):
-        primary = PrimaryIssueClass.CAPABILITY_INVARIANT_CHANGE
-    elif intent is Intent.MODIFY and any(token in requirement for token in ("prefer", "style", "format", "preference", "偏好", "格式")):
-        primary = PrimaryIssueClass.TASK_LOCAL_PREFERENCE
-    elif intent is Intent.MODIFY:
-        primary = PrimaryIssueClass.CAPABILITY_INVARIANT_CHANGE
-    else:
-        primary = PrimaryIssueClass.NO_DEFECT
-    return DecisionRecord(intent, primary, (ControlGap.NONE,), RegressionDisposition.NOT_APPLICABLE, None, (), (), (), None)
-
-
-def _write_internal_candidate(staging: Path, requirement: str) -> Path:
-    name = "generated-skill"
-    candidate = staging / name
-    candidate.mkdir()
-    (candidate / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: Internally generated Skill.\n---\n\n# {name}\n\n{requirement.strip()}\n",
-        encoding="utf-8",
+def _governance_coverage(
+    findings: tuple[object, ...],
+    decisions: tuple[GovernanceDecision, ...],
+    subject: str,
+) -> CheckResult:
+    actionable = {finding.finding_id for finding in findings if finding.confidence > 0}
+    decided = {decision.finding_id for decision in decisions}
+    missing = tuple(sorted(actionable - decided))
+    status = CheckStatus.FAIL if missing else CheckStatus.PASS
+    message = (
+        "missing Codex governance decisions: " + ", ".join(missing)
+        if missing
+        else "Codex supplied decisions for every actionable rule signal"
     )
-    return candidate
+    return CheckResult(
+        "governance.coverage", "codex.governance", subject, True, status,
+        True, True, 1.0, (message,), LifecycleState.VALIDATED, subject,
+    )
 
 
 def _diagnostic_failure(subject: str) -> CheckResult:
-    return CheckResult("diagnostic.evidence", "internal.diagnostics", subject, True, CheckStatus.FAIL, True, True, 1.0, ("insufficient failure evidence",), LifecycleState.VALIDATED, subject)
-
-
-def _blocked_gate(intent: Intent, request: EngineeringRequest, *, decision: DecisionRecord | None = None, policy: dict[str, object] | None = None) -> GateResult:
-    effective = policy or load_gate_policy(request.project_policy)
-    return adjudicate(
-        GateContext(intent, LifecycleState.VALIDATED, request.authorized_to_modify, True, False, decision),
-        (),
-        policy=effective,
+    return CheckResult(
+        "diagnostic.evidence", "codex.diagnostics", subject, True,
+        CheckStatus.FAIL, True, True, 1.0,
+        ("Codex recorded insufficient failure evidence",),
+        LifecycleState.VALIDATED, subject,
     )
 
 
-def _deferred_adjudication(
-    intent: Intent,
-    request: EngineeringRequest,
-    decision: DecisionRecord,
+def _missing_behavioral_check(subject: str) -> CheckResult:
+    return CheckResult(
+        "behavioral.create", "behavioral.runner", subject, True,
+        CheckStatus.NOT_EXECUTED, True, True, 1.0,
+        ("No Create behavioral test was executed",),
+        LifecycleState.VALIDATED, subject,
+    )
+
+
+def _missing_regression_check(subject: str) -> CheckResult:
+    return CheckResult(
+        "B07", "regression.runner", subject, True,
+        CheckStatus.NOT_EXECUTED, True, True, 1.0,
+        ("Required regression command was not supplied",),
+        LifecycleState.VALIDATED, subject,
+    )
+
+
+def _audit_failure(
+    source: Path | None,
+    gate: GateResult,
+    workspace_diff: WorkspaceDiff,
     evidence: tuple[CheckResult, ...],
-    policy: dict[str, object],
-) -> GateResult:
-    return adjudicate(
-        GateContext(intent, LifecycleState.VALIDATED, request.authorized_to_modify, False, False, decision),
+) -> EngineeringOutcome:
+    if source is None:
+        raise ValueError("Audit Only failure requires a source Skill")
+    findings = tuple(
+        {
+            "finding_id": finding.split(":", 1)[0].strip(),
+            "affected_path": str(source),
+            "blocking_reason": finding,
+            "required_next_action": "Codex must address or explicitly resolve the blocking evidence",
+        }
+        for finding in gate.blocking_findings
+    )
+    return EngineeringOutcome(
+        "Unchanged Skill + Minimal Blocking Findings",
+        source,
+        gate,
+        findings,
+        workspace_diff,
+        None,
         evidence,
-        policy=policy,
     )

@@ -4,13 +4,14 @@ import pytest
 
 from engine.models import GateOutcome, GateResult, GateVerdict, Intent
 from engine.workspace import (WorkspaceSession, publish_atomic, PublishNotAuthorized,
-    SourceChangedError, CrossFilesystemPublishError, PublishRecoveryError)
+    CandidateChangedError, SourceChangedError, CrossFilesystemPublishError, PublishRecoveryError)
 import engine.workspace as workspace
 
 def gate(**kw):
     values = dict(verdict=GateVerdict.PASS, outcome=GateOutcome.READY_TO_PUBLISH,
                   blocking_findings=(), warnings=(), required_checks_summary="ok",
-                  evidence_summary="ok", publish_authorized=True, policy_version="v1")
+                  evidence_summary="ok", semantic_confirmed=True,
+                  publish_authorized=True, policy_version="v1")
     values.update(kw)
     return GateResult(**values)
 
@@ -19,6 +20,7 @@ def staged(tmp_path, source):
     session = WorkspaceSession.for_existing(Intent.MODIFY, source)
     session.prepare(tmp_path)
     assert session.staging
+    session.bind_confirmed_artifact(session.staging, workspace.digest_tree(session.staging))
     return session
 
 def test_authorization_required(tmp_path):
@@ -55,7 +57,7 @@ def test_move_failure_restores_backup(tmp_path, monkeypatch):
 def test_post_publish_loadability_failure_recovers(tmp_path):
     source = tmp_path / "source"; source.mkdir(); (source / "SKILL.md").write_text("original")
     session = staged(tmp_path / "out", source); (session.staging / "SKILL.md").unlink()
-    with pytest.raises(PublishRecoveryError): publish_atomic(session, gate())
+    with pytest.raises(CandidateChangedError): publish_atomic(session, gate())
 
 def test_candidate_digest_mismatch_recovers(tmp_path, monkeypatch):
     source = tmp_path / "source"; source.mkdir(); (source / "SKILL.md").write_text("original")
@@ -67,3 +69,12 @@ def test_candidate_digest_mismatch_recovers(tmp_path, monkeypatch):
         return replace(manifest, content_digest="0" * 64)
     monkeypatch.setattr(workspace, "build_artifact_manifest", altered)
     with pytest.raises(PublishRecoveryError): publish_atomic(session, gate())
+
+
+def test_candidate_change_after_confirmation_blocks_before_publish(tmp_path):
+    source = tmp_path / "source"; source.mkdir(); (source / "SKILL.md").write_text("original")
+    session = staged(tmp_path / "out", source)
+    (session.staging / "SKILL.md").write_text("changed after confirmation")
+    with pytest.raises(CandidateChangedError, match="after semantic confirmation"):
+        publish_atomic(session, gate())
+    assert (source / "SKILL.md").read_text() == "original"

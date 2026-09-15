@@ -17,6 +17,7 @@ from engine.providers import (
     GOVERN_AGENT_INSTRUCTIONS,
     ProviderGateway,
 )
+from tests.support import codex_decision, confirmation
 
 
 @dataclass
@@ -29,11 +30,11 @@ class StubProvider:
 
 
 @pytest.mark.parametrize("capability", [CREATE_CANDIDATE, AUDIT_SKILL, GOVERN_AGENT_INSTRUCTIONS, CHECK_SKILL_CONFORMANCE])
-def test_pipeline_capability_available_when_external_providers_disabled(capability: str) -> None:
+def test_provider_capability_unavailable_is_explicit_when_disabled(capability: str) -> None:
     result = ProviderGateway().invoke(capability, {"subject": "demo"}, formal_run=True)
-    assert result.fallback_used
-    assert result.provider_status is ProviderStatus.AVAILABLE
-    assert result.evidence
+    assert result.fallback_used is False
+    assert result.provider_status is ProviderStatus.UNAVAILABLE
+    assert result.limitations
 
 
 def test_orchestrator_routes_provider_result_through_optional_gate_evidence(tmp_path: Path) -> None:
@@ -66,10 +67,13 @@ def test_orchestrator_routes_provider_result_through_optional_gate_evidence(tmp_
     request = EngineeringRequest(
         requirement="audit this skill",
         intent=Intent.AUDIT_ONLY,
+        decision=codex_decision(Intent.AUDIT_ONLY),
         source=source,
+        candidate=None,
         failure_evidence=(),
         authorized_to_modify=False,
         target_parent=tmp_path,
+        semantic_confirmation=confirmation(source),
     )
     outcome = PipelineOrchestrator(provider_gateway=ProviderGateway([provider])).run(request)
 

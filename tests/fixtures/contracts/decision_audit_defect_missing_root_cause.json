@@ -1,1 +1,1 @@
-{"intent":"AUDIT_ONLY","primary_issue_class":"DOCUMENTATION_GAP","control_gaps":["INSTRUCTION_GAP"],"regression_disposition":"RECOMMENDED","root_cause":null,"evidence_limitations":[],"selected_mechanisms":[],"rejected_mechanisms":[],"prompt_rule_justification":null}
+{"intent":"AUDIT_ONLY","primary_issue_class":"DOCUMENTATION_GAP","control_gaps":["INSTRUCTION_GAP"],"regression_disposition":"RECOMMENDED","root_cause":null,"evidence_limitations":[],"selected_mechanisms":[],"rejected_mechanisms":[],"prompt_rule_justification":null,"decided_by":"CODEX"}

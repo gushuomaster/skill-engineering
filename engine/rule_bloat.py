@@ -4,7 +4,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from engine.rule_governance import GovernanceAction
 
 
 @dataclass(frozen=True)
@@ -35,8 +34,6 @@ class RuleFinding:
     confidence: float
     risk: str
     rationale: str
-    candidate_action: GovernanceAction
-    candidate_target_layer: str | None = None
     evidence_refs: tuple[str, ...] = ()
     limitations: tuple[str, ...] = ()
 
@@ -126,8 +123,6 @@ def detect_rule_bloat(units: tuple[RuleUnit, ...], history: RuleHistory | None) 
         confidence: float,
         risk: str,
         rationale: str,
-        action: GovernanceAction,
-        target: str | None = None,
         limitations: tuple[str, ...] = (),
         evidence_refs: tuple[str, ...] = (),
     ) -> None:
@@ -143,8 +138,6 @@ def detect_rule_bloat(units: tuple[RuleUnit, ...], history: RuleHistory | None) 
                 max(0.0, min(1.0, confidence)),
                 risk,
                 rationale,
-                action,
-                target,
                 refs,
                 limitations,
             )
@@ -155,7 +148,7 @@ def detect_rule_bloat(units: tuple[RuleUnit, ...], history: RuleHistory | None) 
         seen.setdefault(unit.normalized_meaning, []).append(unit)
     for normalized, group in seen.items():
         if len(group) > 1:
-            add(f"exact-{len(findings)+1}", tuple(u.id for u in group), ("exact_duplicate",), 1.0, "medium", "Rules have identical normalized meaning.", GovernanceAction.MERGE)
+            add(f"exact-{len(findings)+1}", tuple(u.id for u in group), ("exact_duplicate",), 1.0, "medium", "Rules have identical normalized meaning.")
     for index, left in enumerate(units):
         for right in units[index + 1:]:
             lt, rt = _tokens(left.normalized_meaning), _tokens(right.normalized_meaning)
@@ -172,25 +165,23 @@ def detect_rule_bloat(units: tuple[RuleUnit, ...], history: RuleHistory | None) 
                     min(0.95, score + 0.4),
                     "high",
                     "Opposing directives share overlapping meaning.",
-                    GovernanceAction.MOVE,
-                    "validator",
                 )
             if left.normalized_meaning == right.normalized_meaning:
                 continue
             if score >= 0.6:
-                add(f"similar-{len(findings)+1}", (left.id, right.id), ("semantic_similarity",), score, "low", "Rules are near-duplicates and require human review.", GovernanceAction.MERGE, limitations=("similarity is heuristic",))
+                add(f"similar-{len(findings)+1}", (left.id, right.id), ("semantic_similarity",), score, "low", "Rules are near-duplicates and require Codex review.", limitations=("similarity is heuristic",))
     directive_count = len(units)
     if directive_count >= 8:
-        add("pressure", tuple(u.id for u in units), ("directive_pressure",), min(0.99, directive_count / 20), "low", "High directive density is advisory only.", GovernanceAction.MOVE, "validator")
+        add("pressure", tuple(u.id for u in units), ("directive_pressure",), min(0.99, directive_count / 20), "low", "High directive density is advisory only.")
     complex_units = tuple(u.id for u in units if u.condition or u.exception)
     if complex_units:
-        add("complexity", complex_units, ("conditional_complexity", "branch_depth"), 0.7, "low", "Conditional or exception-heavy rules may be easier to enforce mechanically.", GovernanceAction.MOVE, "validator")
+        add("complexity", complex_units, ("conditional_complexity", "branch_depth"), 0.7, "low", "Conditional or exception-heavy rules require mechanism review.")
     env_units = tuple(u.id for u in units if u.environment_qualifier)
     if len(env_units) >= 2:
-        add("environment", env_units, ("environment_concentration", "environment_leakage"), 0.7, "low", "Environment-specific rules may indicate environment leakage.", GovernanceAction.MOVE, "environment_detector")
+        add("environment", env_units, ("environment_concentration", "environment_leakage"), 0.7, "low", "Environment-specific rules may indicate environment leakage.")
     workaround_units = tuple(u.id for u in units if re.search(r"workaround|temporary|hack|until\s+fixed|临时|绕过", u.normalized_meaning, re.I))
     if workaround_units:
-        add("workaround", workaround_units, ("case_specific_patch_smell",), 0.75, "medium", "Workaround language suggests a case-specific prompt patch.", GovernanceAction.MOVE, "implementation")
+        add("workaround", workaround_units, ("case_specific_patch_smell",), 0.75, "medium", "Workaround language suggests a case-specific prompt patch.")
     obsolete_units = tuple(u.id for u in units if _OBSOLETE.search(u.normalized_meaning))
     if obsolete_units:
         add(
@@ -200,13 +191,12 @@ def detect_rule_bloat(units: tuple[RuleUnit, ...], history: RuleHistory | None) 
             0.8,
             "medium",
             "Rules reference potentially obsolete paths, commands, versions, or resources.",
-            GovernanceAction.DELETE,
         )
     mechanism_units = tuple(u.id for u in units if u.referenced_mechanism)
     if len(mechanism_units) >= 2:
-        add("cross-layer", mechanism_units, ("cross_layer_duplication", "mechanism_substitution"), 0.65, "low", "Rules reference mechanisms that may already enforce the invariant.", GovernanceAction.MERGE)
+        add("cross-layer", mechanism_units, ("cross_layer_duplication", "mechanism_substitution"), 0.65, "low", "Rules reference mechanisms that may already enforce the invariant.")
     if history is None:
-        add("history", (), ("historical_growth",), 0.0, "low", "Git history unavailable; growth check skipped.", GovernanceAction.KEEP, limitations=("missing Git history",), evidence_refs=("git-history:unavailable",))
+        add("history", (), ("historical_growth",), 0.0, "low", "Git history unavailable; growth check skipped.", limitations=("missing Git history",), evidence_refs=("git-history:unavailable",))
     elif len(history.rule_counts) >= 2 and history.rule_counts[-1] > history.rule_counts[0]:
-        add("growth", tuple(u.id for u in units), ("historical_growth",), 0.8, "medium", "Rule count increased across available history.", GovernanceAction.MOVE, "workflow")
+        add("growth", tuple(u.id for u in units), ("historical_growth",), 0.8, "medium", "Rule count increased across available history.")
     return tuple(findings)

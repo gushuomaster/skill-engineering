@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"Codex semantic confirmation","type":"object","additionalProperties":false,"required":["artifact_digest","rationale","confirmed_by"],"properties":{"artifact_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"},"rationale":{"type":"string","minLength":1},"confirmed_by":{"const":"CODEX"}}}

@@ -1,4 +1,6 @@
-# Skill Engineering Plugin — V1 Architecture Baseline
+# Skill Engineering Plugin — Historical V1 Architecture Baseline
+
+> Superseded on 2026-09-15 by [the architecture correction](../../architecture-correction-2026-09-15.md). This file remains as design history. Statements assigning semantic intent, RCA, classification, mechanism choice, rule governance, semantic PASS, or publication authorization to the Plugin or Internal Core are no longer authoritative; Codex owns those decisions.
 
 | Field | Value |
 |---|---|

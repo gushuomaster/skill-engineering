@@ -1,68 +1,50 @@
 from pathlib import Path
 
-import pytest
-
-from engine.models import GateVerdict, Intent
-from engine.orchestrator import EngineeringRequest, PipelineBlockedError, PipelineOrchestrator
-
-
-FIXTURES = Path(__file__).parents[1] / "fixtures" / "skills"
+from engine.mechanism_selection import MERGE_INVARIANT
+from engine.models import Intent, PrimaryIssueClass
+from engine.orchestrator import EngineeringRequest, PipelineOrchestrator, publish
+from tests.support import codex_decision, confirmation, copy_candidate
 
 
-@pytest.mark.parametrize(
-    ("case", "expected_outcome", "expected_publish"),
-    [
-        ("create-internal-fallback", "Validated Complete Skill", True),
-        ("modify-stable-invariant", "Validated Complete Skill", True),
-        ("modify-task-local-preference", "Validated Complete Skill", False),
-        ("fix-environment-bug", "Validated Complete Skill", True),
-        ("audit-only-pass", "Validated Complete Skill", False),
-        ("audit-only-fail", "Unchanged Skill + Minimal Blocking Findings", False),
-        ("audit-optimize-pass", "Validated Complete Skill", True),
-    ],
-)
-def test_frozen_v1_flows(case: str, expected_outcome: str, expected_publish: bool, tmp_path: Path, monkeypatch) -> None:
-    source = FIXTURES / ("minimal-valid" if case != "audit-only-fail" else "broken")
-    if case == "audit-only-fail":
-        source = tmp_path / "broken"
-        source.mkdir()
-        (source / "SKILL.md").write_text("# missing frontmatter", encoding="utf-8")
-    intent = {
-        "create-internal-fallback": Intent.CREATE,
-        "modify-stable-invariant": Intent.MODIFY,
-        "modify-task-local-preference": Intent.MODIFY,
-        "fix-environment-bug": Intent.FIX,
-        "audit-only-pass": Intent.AUDIT_ONLY,
-        "audit-only-fail": Intent.AUDIT_ONLY,
-        "audit-optimize-pass": Intent.AUDIT_OPTIMIZE,
-    }[case]
-    request = EngineeringRequest(
-        requirement=case,
-        intent=intent,
-        source=None if intent is Intent.CREATE else source,
-        failure_evidence=("reproducible defect",) if intent is Intent.FIX else (("needed behavior",) if case == "audit-optimize-pass" else ()),
-        authorized_to_modify=intent in {Intent.CREATE, Intent.MODIFY, Intent.FIX, Intent.AUDIT_OPTIMIZE},
-        target_parent=tmp_path,
-    )
-    if case == "fix-environment-bug":
-        request = EngineeringRequest(
-            requirement=case,
-            intent=Intent.FIX,
-            source=source,
-            failure_evidence=("reproducible environment defect",),
-            authorized_to_modify=True,
-            target_parent=tmp_path,
-            regression_runner=lambda artifact: __import__('engine.models', fromlist=['CheckResult','CheckStatus','LifecycleState']).CheckResult('B07','internal.regression','environment',True,__import__('engine.models', fromlist=['CheckStatus']).CheckStatus.PASS,True,True,1.0,('runner evidence',),__import__('engine.models', fromlist=['LifecycleState']).LifecycleState.VALIDATED,str(artifact)),
-        )
-    outcome = PipelineOrchestrator().run(request)
-    assert outcome.outcome_type == expected_outcome
-    assert outcome.gate_result.publish_authorized is expected_publish
-    if case == "audit-only-fail":
-        assert outcome.gate_result.verdict is GateVerdict.FAIL
+FIXTURE = Path(__file__).parents[1] / "fixtures" / "skills" / "minimal-valid"
 
 
-def test_non_audit_insufficient_evidence_delivers_no_third_output(tmp_path: Path) -> None:
-    request = EngineeringRequest("fix", Intent.FIX, FIXTURES / "minimal-valid", (), True, tmp_path)
-    with pytest.raises(PipelineBlockedError) as caught:
-        PipelineOrchestrator().run(request)
-    assert caught.value.gate_result.verdict is GateVerdict.FAIL
+def test_audit_optimize_without_candidate_remains_read_only(tmp_path: Path) -> None:
+    outcome = PipelineOrchestrator().run(EngineeringRequest(
+        "audit and optimize", Intent.AUDIT_OPTIMIZE,
+        codex_decision(Intent.AUDIT_OPTIMIZE),
+        FIXTURE, None, (), True, tmp_path,
+        semantic_confirmation=confirmation(FIXTURE),
+    ))
+    assert outcome.artifact_path == FIXTURE
+    assert outcome.gate_result.publish_authorized is False
+    assert outcome.publication_session is None
+    assert not list(tmp_path.glob(".skill-engineering-*"))
+
+
+def test_ready_candidate_is_not_published_until_explicit_call(tmp_path: Path) -> None:
+    source_parent = tmp_path / "published"
+    source_parent.mkdir()
+    source = copy_candidate(FIXTURE, source_parent)
+    original = (source / "SKILL.md").read_text(encoding="utf-8")
+    candidate_parent = tmp_path / "codex"
+    candidate_parent.mkdir()
+    candidate = copy_candidate(source, candidate_parent)
+    changed = (candidate / "SKILL.md").read_text(encoding="utf-8") + "\nCodex-authored capability.\n"
+    (candidate / "SKILL.md").write_text(changed, encoding="utf-8")
+
+    outcome = PipelineOrchestrator().run(EngineeringRequest(
+        "add a stable capability", Intent.MODIFY,
+        codex_decision(Intent.MODIFY, primary=PrimaryIssueClass.CAPABILITY_INVARIANT_CHANGE,
+                       selected=(MERGE_INVARIANT,)),
+        source, candidate, (), True, source.parent,
+        semantic_confirmation=confirmation(candidate),
+        publish_requested=True,
+    ))
+
+    assert (source / "SKILL.md").read_text(encoding="utf-8") == original
+    assert outcome.gate_result.publish_authorized is True
+    result = publish(outcome)
+    assert result.published_path == source
+    assert (source / "SKILL.md").read_text(encoding="utf-8") == changed
+    assert result.backup_path is not None

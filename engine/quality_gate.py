@@ -1,4 +1,4 @@
-"""Versioned policy loading and sole final quality adjudication."""
+"""Versioned engineering gate driven by evidence and Codex confirmation."""
 
 from __future__ import annotations
 
@@ -73,6 +73,8 @@ class GateContext:
     candidate_requires_publish: bool
     workspace_publishable: bool
     decision: DecisionRecord | None
+    semantic_confirmed: bool = False
+    publish_requested: bool = False
 
 
 def _read_policy(path: Path) -> dict[str, object]:
@@ -295,6 +297,12 @@ def _adjudicate_findings(
             if mapped_policy == "B11":
                 _append_unique(blocking, _finding("B11", result))
             continue
+        advisory_rule_signal = result.check_id.startswith(
+            ("rule-bloat", "rule_bloat", "rule-signal.")
+        )
+        if result.required and result.status is CheckStatus.FAIL and not advisory_rule_signal:
+            _append_unique(blocking, _finding(mapped_policy or "B04", result))
+            continue
         optional_b11 = mapped_policy == "B11" and not result.required
         if (
             result.status is CheckStatus.FAIL
@@ -377,7 +385,7 @@ def adjudicate(
     *,
     policy: Mapping[str, object] | None = None,
 ) -> GateResult:
-    """Return the sole final verdict after applying an effective Gate policy."""
+    """Evaluate engineering evidence; semantic authority stays with Codex."""
     effective_policy = (
         _read_policy(POLICY_PATH)
         if policy is None
@@ -390,6 +398,13 @@ def adjudicate(
         missing_count,
         evidence_count,
     ) = _adjudicate_findings(context, evidence, effective_policy)
+    blocking = list(blocking)
+    warnings = list(warnings)
+    if not context.semantic_confirmed:
+        _append_unique(
+            blocking,
+            "B12: Codex semantic confirmation for the current artifact is absent",
+        )
     verdict = GateVerdict.FAIL if blocking else GateVerdict.PASS
 
     publish_authorized = (
@@ -399,6 +414,7 @@ def adjudicate(
         and context.candidate_requires_publish
         and context.workspace_publishable
         and context.state is LifecycleState.VALIDATED
+        and context.publish_requested
     )
     if verdict is GateVerdict.FAIL:
         outcome = (
@@ -411,6 +427,7 @@ def adjudicate(
     elif (
         context.intent is Intent.AUDIT_ONLY
         or not context.candidate_requires_publish
+        or not context.publish_requested
     ):
         outcome = GateOutcome.UNCHANGED_VALIDATED
     else:
@@ -426,10 +443,11 @@ def adjudicate(
     return GateResult(
         verdict=verdict,
         outcome=outcome,
-        blocking_findings=blocking,
-        warnings=warnings,
+        blocking_findings=tuple(blocking),
+        warnings=tuple(warnings),
         required_checks_summary=required_checks_summary,
         evidence_summary=evidence_summary,
+        semantic_confirmed=context.semantic_confirmed,
         publish_authorized=publish_authorized,
         policy_version=str(effective_policy["policy_version"]),
     )

@@ -65,6 +65,8 @@ def _context(**overrides: object) -> GateContext:
         "candidate_requires_publish": True,
         "workspace_publishable": True,
         "decision": None,
+        "semantic_confirmed": True,
+        "publish_requested": True,
     }
     values.update(overrides)
     return GateContext(**values)
@@ -431,6 +433,37 @@ def test_publishable_authorized_candidate_pass_is_ready_to_publish() -> None:
     assert result.verdict is GateVerdict.PASS
     assert result.outcome is GateOutcome.READY_TO_PUBLISH
     assert result.publish_authorized is True
+
+
+def test_candidate_without_explicit_publish_request_is_validated_but_not_authorized() -> None:
+    result = adjudicate(_context(publish_requested=False), _passing_evidence())
+
+    assert result.verdict is GateVerdict.PASS
+    assert result.outcome is GateOutcome.UNCHANGED_VALIDATED
+    assert result.publish_authorized is False
+
+
+def test_unmapped_required_failure_blocks_as_b04() -> None:
+    failed = _check(
+        "behavioral.modify",
+        source="cli.command",
+        status=CheckStatus.FAIL,
+        evidence=("exit_code=1",),
+    )
+
+    result = adjudicate(_context(), _passing_evidence() + (failed,))
+
+    assert result.verdict is GateVerdict.FAIL
+    assert any(finding.startswith("B04: behavioral.modify") for finding in result.blocking_findings)
+
+
+def test_passing_checks_without_codex_semantic_confirmation_cannot_pass() -> None:
+    result = adjudicate(_context(semantic_confirmed=False), _passing_evidence())
+
+    assert result.verdict is GateVerdict.FAIL
+    assert result.semantic_confirmed is False
+    assert result.publish_authorized is False
+    assert any(finding.startswith("B12") for finding in result.blocking_findings)
 
 
 def test_pass_without_publishable_workspace_does_not_authorize_publication() -> None:
