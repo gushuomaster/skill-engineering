@@ -19,6 +19,8 @@ Select exactly one mode from the request and context. Pass it explicitly to the 
 - **Audit Only** - inspect without copying or writing; return the unchanged validated Skill or minimal blocking findings.
 - **Audit + Optimize** - audit first, then stage an isolated optimization copy only when a change is needed and authorized.
 
+For Audit Only and advice requests, keep the target tree byte-for-byte unchanged throughout the run. Record its digest before executable checks and verify the same digest afterward. Use non-writing commands; for Python, prefer `python -B` with `PYTHONDONTWRITEBYTECODE=1`. Do not run `py_compile` or any command that creates caches, coverage data, test artifacts, or temporary files below the target. When a check cannot be made read-only, report that evidence limitation instead of writing and cleaning up afterward.
+
 ## Workflow
 
 1. Load context and inventory the target.

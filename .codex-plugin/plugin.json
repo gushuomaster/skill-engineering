@@ -1,6 +1,6 @@
 {
   "name": "skill-engineering",
-  "version": "1.0.2",
+  "version": "1.0.2+codex.20260916014822",
   "description": "Deterministic engineering support for Codex-authored Skill creation, repair, audit, validation, and release.",
   "author": {
     "name": "Local developer"
@@ -12,7 +12,9 @@
     "longDescription": "Helps Codex stage candidates, collect evidence, run deterministic checks, review rule signals, and guard atomic Skill publication.",
     "developerName": "Local developer",
     "category": "Productivity",
-    "capabilities": ["Write"],
-    "defaultPrompt": "Help me engineer this Skill while I retain semantic decisions and use the Plugin for deterministic evidence and release safeguards."
+    "capabilities": [
+      "Write"
+    ],
+    "defaultPrompt": "Help me engineer this Skill while I retain semantic decisions and use the Plugin for evidence and release safeguards."
   }
 }

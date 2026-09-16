@@ -12,11 +12,17 @@ def test_plugin_manifest_exposes_only_skill_component():
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     assert manifest["name"] == "skill-engineering"
-    assert manifest["version"] == "1.0.2"
     assert manifest["skills"] == "./skills/"
     assert "mcpServers" not in manifest
     assert "apps" not in manifest
     assert "hooks" not in manifest
+
+
+def test_plugin_default_prompt_respects_codex_host_limit():
+    manifest_path = Path(__file__).parents[2] / ".codex-plugin" / "plugin.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert len(manifest["interface"]["defaultPrompt"]) <= 128
 
 
 def test_project_packages_are_importable():
@@ -30,5 +36,5 @@ def test_plugin_and_package_versions_match():
     package = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     plugin_version = manifest["version"]
     package_version = package["project"]["version"]
-    assert re.fullmatch(r"\d+\.\d+\.\d+", plugin_version)
-    assert plugin_version == package_version
+    assert re.fullmatch(r"\d+\.\d+\.\d+(?:\+codex\.\d{14})?", plugin_version)
+    assert plugin_version.partition("+")[0] == package_version
