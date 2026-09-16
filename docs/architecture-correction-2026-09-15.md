@@ -1,5 +1,7 @@
 # Skill Engineering Architecture Correction
 
+> **当前权威架构（2026-09-16 更新）**：本页取代此前把 signals、治理决策、确认和 Gate 合并在一次 `run()` 中的图示。实现权威仍是 `scripts/skill_engineering.py` 与 `engine/`。
+
 ## Purpose
 
 Codex is the author, decision-maker, and semantic evaluator for Skill engineering. The Skill Engineering Plugin is an installable capability package that gives Codex deterministic workspace, evidence, validation, and publication safeguards. It is not an agent and does not simulate model reasoning in Python.
@@ -40,20 +42,71 @@ Rule scanners emit `RuleFinding` signals, confidence, evidence locations, and li
 
 ## Deterministic lifecycle
 
-```text
-Codex intent + DecisionRecord + complete candidate
-    -> source baseline digest
-    -> engine-owned staging copy
-    -> manifest and file diff
-    -> structure/reference/real regression checks
-    -> advisory rule signals and optional Provider evidence
-    -> Codex governance decisions and semantic confirmation
-    -> Quality Gate readiness
-    -> separate explicit publish operation
-    -> same-filesystem atomic replacement with recovery backup
+```mermaid
+flowchart TD
+    A[用户请求] --> B[Codex 选择显式 mode]
+    B --> C[Engine inspect]
+    C --> D[baseline manifest + digest]
+    C --> E[deterministic signals/findings]
+    C --> F[Provider capabilities + advisory evidence]
+    D --> G[Codex Intent / RCA / 机制选择]
+    E --> G
+    F --> G
+    G --> H[Codex GovernanceDecisions]
+    H --> I[Codex 完整候选；Audit Only 无候选]
+    I --> J[Engine validate]
+    J --> K[deterministic_evidence]
+    J --> L[advisory_evidence]
+    J --> M[VALIDATED_PENDING_CONFIRMATION]
+    K --> N[Codex 审阅当前 artifact 与 evidence]
+    L --> N
+    M --> N
+    N --> O[SemanticConfirmation 绑定精确 digest]
+    O --> P[Quality Gate / AuditResult]
+    P -->|Audit Only| Q[AuditExecution + ArtifactAssessment]
+    P -->|change mode| R{publish_requested?}
+    R -->|false| S[VALIDATED<br/>publish_authorized=false]
+    R -->|true 且 Gate 允许| T[READY_TO_PUBLISH]
+    T --> U[独立 publish]
+    U --> V[重验 candidate digest + confirmation]
+    V --> W[重验 source baseline]
+    W --> X[建立可恢复 backup]
+    X --> Y[原子替换]
+    Y --> Z[发布后 manifest + digest 校验]
+    Z -->|成功| AA[PUBLISHED]
+    Z -->|失败| AB[恢复 backup]
+    AB -->|恢复成功| AC[PUBLISH_FAILED_RECOVERED]
+    AB -->|恢复失败| AD[PUBLISH_FAILED_UNRECOVERABLE]
 ```
 
-The `run()` operation never publishes. Modification authorization permits isolation and staging but does not request publication. `publish_requested` is a separate input set by CLI `--publish`; without it, Gate PASS leaves `publish_authorized=false`. `publish(outcome)` is a separate explicit call and accepts only a Gate-ready outcome. Before moving files, atomic publication checks both the source baseline digest and the exact candidate digest bound to `SemanticConfirmation`; it records pre-source, candidate, and post-publish digests, backup path, diff, and status, and restores the original after publication failure.
+`inspect()` 在 Codex 提交 RCA、机制和治理决策之前产生稳定 finding ID。`validate()` 只产生 staged artifact、两类 evidence、diff 和 `VALIDATED_PENDING_CONFIRMATION`；它不计算最终 Gate，也不发布。`confirm()` 在验证完成后校验当前 bytes 与 Codex 的 digest 绑定，再计算 Gate。`publish()` 始终独立调用。
+
+Audit Only 的 behavior/regression 命令在一次性审计快照中执行。Engine 在每条外部命令后、结果生成前和确认时复核源 snapshot；源变化只会使结果进入 `INCOMPLETE / UNKNOWN`，不会自动恢复或覆盖源目录。
+
+The compatibility `run()` operation delegates to `inspect → validate → confirm` and never publishes. Modification authorization permits isolation and staging but does not request publication. `publish_requested` is a separate input; without it, Gate PASS produces `VALIDATED` with `publish_authorized=false`. `publish(outcome)` accepts only a `READY_TO_PUBLISH` outcome. It rechecks the source and candidate, moves the existing target to a recoverable backup first, performs the atomic replacement second, validates the published bytes, and restores the backup after failure.
+
+## State mapping
+
+| Layer | State | Entry condition | Exit condition | Terminal |
+|---|---|---|---|---|
+| Lifecycle | `INSPECTED` | baseline and findings captured | Codex submits decisions to validate | No |
+| Lifecycle | `VALIDATED_PENDING_CONFIRMATION` | artifact checks complete | Codex submits current digest confirmation | No |
+| Lifecycle | `VALIDATED` | Gate passes and `publish_requested=false` | a new explicit request starts a new confirmation | Yes for this run |
+| Lifecycle | `READY_TO_PUBLISH` | Gate passes and publication was requested | independent `publish()` | No |
+| Lifecycle | `PUBLISHED` | post-publish validation succeeds | none | Yes |
+| Lifecycle | `PUBLISH_FAILED_RECOVERED` | publish fails and restoration succeeds | none | Yes |
+| Lifecycle | `PUBLISH_FAILED_UNRECOVERABLE` | publish and restoration both fail | operator recovery | Yes, severe |
+| Lifecycle | `AUDIT_COMPLETE_VALID` | execution complete; no target findings | none | Yes |
+| Lifecycle | `AUDIT_COMPLETE_FINDINGS` | execution complete; nonblocking findings | none | Yes |
+| Lifecycle | `AUDIT_COMPLETE_BLOCKING_FINDINGS` | execution complete; serious target defects | none | Yes |
+| Lifecycle | `AUDIT_INCOMPLETE` | command/source/integrity failure | rerun from inspect | Yes |
+| Gate | `PASS / READY_TO_PUBLISH` | release checks and confirmation pass | publish or remain staged | No |
+| Gate | `PASS / VALIDATED` | checks pass but publication was not requested | new explicit request | Yes for this run |
+| PublishResult | `PUBLISHED` | replacement and post-check pass | none | Yes |
+| PublishResult | `PUBLISH_FAILED_RECOVERED` | recovery completes | none | Yes |
+| PublishResult | `PUBLISH_FAILED_UNRECOVERABLE` | recovery fails | operator recovery | Yes |
+
+Legacy `GATE_PASSED`, `UNCHANGED_VALIDATED`, and `UNCHANGED_BLOCKED` remain only for compatibility with pre-2.0 policy/state tests. The phased entry points do not use them as terminal states.
 
 ## Provider boundaries
 

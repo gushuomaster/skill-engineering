@@ -22,13 +22,27 @@ class InvalidTransition(ValueError):
 
 
 BASE_TRANSITIONS: dict[LifecycleState, frozenset[LifecycleState]] = {
-    LifecycleState.DISCOVERED: frozenset({LifecycleState.STAGED, LifecycleState.AUDITED, LifecycleState.CLASSIFIED}),
+    LifecycleState.DISCOVERED: frozenset({LifecycleState.INSPECTED, LifecycleState.STAGED, LifecycleState.AUDITED, LifecycleState.CLASSIFIED}),
+    LifecycleState.INSPECTED: frozenset({LifecycleState.CLASSIFIED}),
     LifecycleState.STAGED: frozenset({LifecycleState.CLASSIFIED, LifecycleState.AUDITED}),
     LifecycleState.AUDITED: frozenset({LifecycleState.STAGED, LifecycleState.CLASSIFIED, LifecycleState.VALIDATED}),
     LifecycleState.CLASSIFIED: frozenset({LifecycleState.MECHANISM_SELECTED}),
-    LifecycleState.MECHANISM_SELECTED: frozenset({LifecycleState.STAGED, LifecycleState.AUDITED}),
+    LifecycleState.MECHANISM_SELECTED: frozenset({LifecycleState.STAGED, LifecycleState.AUDITED, LifecycleState.VALIDATED_PENDING_CONFIRMATION}),
+    LifecycleState.VALIDATED_PENDING_CONFIRMATION: frozenset({
+        LifecycleState.VALIDATED,
+        LifecycleState.GATE_FAILED,
+        LifecycleState.AUDIT_COMPLETE_VALID,
+        LifecycleState.AUDIT_COMPLETE_FINDINGS,
+        LifecycleState.AUDIT_COMPLETE_BLOCKING_FINDINGS,
+        LifecycleState.AUDIT_INCOMPLETE,
+    }),
     LifecycleState.VALIDATED: frozenset({LifecycleState.AUDITED, LifecycleState.GATE_PASSED, LifecycleState.GATE_FAILED}),
     LifecycleState.GATE_PASSED: frozenset({LifecycleState.PUBLISHED, LifecycleState.UNCHANGED_VALIDATED}),
+    LifecycleState.READY_TO_PUBLISH: frozenset({
+        LifecycleState.PUBLISHED,
+        LifecycleState.PUBLISH_FAILED_RECOVERED,
+        LifecycleState.PUBLISH_FAILED_UNRECOVERABLE,
+    }),
     LifecycleState.GATE_FAILED: frozenset({
         LifecycleState.CLASSIFIED,
         LifecycleState.MECHANISM_SELECTED,
@@ -58,10 +72,25 @@ def allowed_targets(state: LifecycleState, context: TransitionContext) -> frozen
             targets.intersection_update({LifecycleState.AUDITED, LifecycleState.UNCHANGED_BLOCKED,
                                           LifecycleState.CLASSIFIED, LifecycleState.MECHANISM_SELECTED,
                                           LifecycleState.VALIDATED})
+        if state is LifecycleState.VALIDATED_PENDING_CONFIRMATION:
+            targets.intersection_update({
+                LifecycleState.GATE_FAILED,
+                LifecycleState.AUDIT_COMPLETE_VALID,
+                LifecycleState.AUDIT_COMPLETE_FINDINGS,
+                LifecycleState.AUDIT_COMPLETE_BLOCKING_FINDINGS,
+                LifecycleState.AUDIT_INCOMPLETE,
+            })
     else:
         if context.intent is not Intent.AUDIT_OPTIMIZE or context.modification_needed:
             targets.discard(LifecycleState.UNCHANGED_VALIDATED)
         targets.discard(LifecycleState.UNCHANGED_BLOCKED)
+        if state is LifecycleState.VALIDATED_PENDING_CONFIRMATION:
+            targets.difference_update({
+                LifecycleState.AUDIT_COMPLETE_VALID,
+                LifecycleState.AUDIT_COMPLETE_FINDINGS,
+                LifecycleState.AUDIT_COMPLETE_BLOCKING_FINDINGS,
+                LifecycleState.AUDIT_INCOMPLETE,
+            })
         staging_first = context.intent in {Intent.CREATE, Intent.MODIFY, Intent.FIX}
         if staging_first and state is LifecycleState.DISCOVERED:
             targets.discard(LifecycleState.CLASSIFIED)

@@ -52,13 +52,14 @@ def test_audit_only_invalid_skill_returns_findings_without_copy(tmp_path: Path) 
     (source / "SKILL.md").write_text("# missing frontmatter", encoding="utf-8")
     outcome = PipelineOrchestrator().run(audit_request(source, tmp_path))
 
-    assert outcome.outcome_type == "Unchanged Skill + Minimal Blocking Findings"
-    assert outcome.gate_result.verdict is GateVerdict.FAIL
+    assert outcome.outcome_type == "AUDIT_COMPLETE_BLOCKING_FINDINGS"
+    assert outcome.gate_result.verdict is GateVerdict.PASS
+    assert outcome.artifact_assessment.value == "BLOCKING_FINDINGS"
     assert not list(tmp_path.glob(".skill-engineering-*"))
 
 
 @pytest.mark.parametrize("intent", [Intent.MODIFY, Intent.FIX])
-def test_mutating_flows_stage_complete_candidate_before_classification(intent: Intent, tmp_path: Path) -> None:
+def test_mutating_flows_inspect_and_classify_before_staging_candidate(intent: Intent, tmp_path: Path) -> None:
     source = FIXTURES / "minimal-valid"
     candidate_parent = tmp_path / "codex"
     candidate_parent.mkdir()
@@ -82,7 +83,8 @@ def test_mutating_flows_stage_complete_candidate_before_classification(intent: I
         publish_requested=True,
     ))
 
-    assert trace.index(LifecycleState.STAGED) < trace.index(LifecycleState.CLASSIFIED)
+    assert trace.index(LifecycleState.INSPECTED) < trace.index(LifecycleState.CLASSIFIED)
+    assert trace.index(LifecycleState.CLASSIFIED) < trace.index(LifecycleState.STAGED)
     assert outcome.artifact_path != source
     assert outcome.publication_session is not None
     assert digest_tree(source) != ""

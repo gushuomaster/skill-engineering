@@ -1,43 +1,45 @@
-"""Deterministic workspace, evidence, and release support for Codex Skill work."""
+"""Phased deterministic support for Codex-led Skill engineering."""
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable
+from uuid import uuid4
 
-from engine.diagnostics import validate_classification
 from engine.contracts import validate_contract
+from engine.diagnostics import validate_classification
 from engine.evidence import EvidenceCollector
-from engine.inventory import build_artifact_manifest
+from engine.inventory import build_artifact_manifest, digest_tree, snapshot_tree
 from engine.mechanism_selection import validate_mechanism_selection
 from engine.models import (
-    CheckResult,
-    CheckStatus,
-    DecisionRecord,
-    GateResult,
-    Intent,
-    LifecycleState,
-    PrimaryIssueClass,
-    RegressionDisposition,
-    SemanticConfirmation,
+    ArtifactAssessment, ArtifactManifest, AuditExecution, CheckResult, CheckStatus,
+    DecisionRecord, DirectorySnapshot, GateOutcome, GateResult, GateVerdict, Intent,
+    LifecycleState, PrimaryIssueClass, ProviderEvidence, ProviderResult, ProviderStatus,
+    RegressionDisposition, SemanticConfirmation,
 )
-from engine.providers import AUDIT_SKILL, ProviderGateway, provider_result_to_check_result
+from engine.providers import (
+    AUDIT_SKILL, CAPABILITIES, CHECK_SKILL_CONFORMANCE, ProviderGateway,
+)
 from engine.quality_gate import GateContext, adjudicate, load_gate_policy
-from engine.rule_bloat import detect_rule_bloat, extract_rule_units
+from engine.rule_bloat import RuleFinding, detect_rule_bloat, extract_rule_units
 from engine.rule_governance import (
-    GovernanceDecision,
-    governance_evidence,
-    signal_evidence,
+    GovernanceDecision, governance_evidence, signal_evidence,
     validate_governance_decisions,
 )
-from engine.state_machine import TransitionContext, transition
 from engine.workspace import PublishResult, WorkspaceDiff, WorkspaceSession, publish_atomic
 from validators.reference_integrity import validate_references
 from validators.skill_structure import validate_skill_structure
 
 
+TOOL_SCHEMA_VERSION = "2.0"
+
+
 @dataclass(frozen=True)
 class EngineeringRequest:
+    """Compatibility request; run() executes all formal phases in order."""
     requirement: str
     intent: Intent
     decision: DecisionRecord
@@ -55,6 +57,53 @@ class EngineeringRequest:
 
 
 @dataclass(frozen=True)
+class InspectionBundle:
+    inspection_id: str
+    mode: Intent
+    source_path: Path | None
+    baseline_manifest: ArtifactManifest | None
+    baseline_snapshot: DirectorySnapshot | None
+    baseline_digest: str | None
+    signals: tuple[CheckResult, ...]
+    findings: tuple[RuleFinding, ...]
+    finding_ids: tuple[str, ...]
+    provider_capabilities: tuple[str, ...]
+    provider_evidence: tuple[ProviderEvidence, ...]
+    created_at: str
+    tool_schema_version: str
+    lifecycle_state: LifecycleState = LifecycleState.INSPECTED
+
+
+@dataclass(frozen=True)
+class ValidationBundle:
+    validation_id: str
+    inspection_id: str
+    intent: Intent
+    source_path: Path | None
+    baseline_snapshot: DirectorySnapshot | None
+    baseline_digest: str | None
+    artifact_path: Path
+    staging_path: Path | None
+    target_parent: Path
+    artifact_manifest: ArtifactManifest
+    artifact_digest: str
+    decision: DecisionRecord
+    governance_decisions: tuple[GovernanceDecision, ...]
+    deterministic_evidence: tuple[CheckResult, ...]
+    advisory_evidence: tuple[CheckResult, ...]
+    workspace_diff: WorkspaceDiff
+    checks_fingerprint: str
+    authorized_to_modify: bool
+    publish_requested: bool
+    project_policy: Path | None
+    pending_semantic_confirmation: bool = True
+    gate_result: GateResult | None = None
+    audit_execution: AuditExecution | None = None
+    artifact_assessment: ArtifactAssessment | None = None
+    lifecycle_state: LifecycleState = LifecycleState.VALIDATED_PENDING_CONFIRMATION
+
+
+@dataclass(frozen=True)
 class EngineeringOutcome:
     outcome_type: str
     artifact_path: Path
@@ -63,16 +112,19 @@ class EngineeringOutcome:
     workspace_diff: WorkspaceDiff
     publication_session: WorkspaceSession | None
     evidence: tuple[CheckResult, ...] = ()
+    deterministic_evidence: tuple[CheckResult, ...] = ()
+    advisory_evidence: tuple[CheckResult, ...] = ()
+    audit_execution: AuditExecution | None = None
+    artifact_assessment: ArtifactAssessment | None = None
+    lifecycle_state: LifecycleState = LifecycleState.VALIDATED
+    validation: ValidationBundle | None = None
+    semantic_confirmation: SemanticConfirmation | None = None
 
 
 class PipelineBlockedError(RuntimeError):
-    def __init__(
-        self,
-        gate_result: GateResult,
-        artifact_path: Path | None = None,
-        workspace_diff: WorkspaceDiff | None = None,
-        evidence: tuple[CheckResult, ...] = (),
-    ) -> None:
+    def __init__(self, gate_result: GateResult, artifact_path: Path | None = None,
+                 workspace_diff: WorkspaceDiff | None = None,
+                 evidence: tuple[CheckResult, ...] = ()) -> None:
         super().__init__("Skill engineering pipeline blocked by the Quality Gate")
         self.gate_result = gate_result
         self.artifact_path = artifact_path
@@ -81,13 +133,9 @@ class PipelineBlockedError(RuntimeError):
 
 
 class PipelineOrchestrator:
-    """Run deterministic stages around decisions and candidate content supplied by Codex."""
-
-    def __init__(
-        self,
-        state_observer: Callable[[LifecycleState], None] | None = None,
-        provider_gateway: ProviderGateway | None = None,
-    ) -> None:
+    """Expose inspect, validate, and confirm as separate engine phases."""
+    def __init__(self, state_observer: Callable[[LifecycleState], None] | None = None,
+                 provider_gateway: ProviderGateway | None = None) -> None:
         self.state_history: list[LifecycleState] = []
         self._state_observer = state_observer
         self._provider_gateway = provider_gateway
@@ -97,198 +145,394 @@ class PipelineOrchestrator:
         if self._state_observer is not None:
             self._state_observer(state)
 
-    def _move(
-        self,
-        state: LifecycleState,
-        target: LifecycleState,
-        request: EngineeringRequest,
-        session: WorkspaceSession,
-        *,
-        modification_needed: bool = False,
-    ) -> LifecycleState:
-        state = transition(
-            state,
-            target,
-            _context(request, session, modification_needed=modification_needed),
-        )
-        self._record(state)
-        return state
-
-    def run(self, request: EngineeringRequest) -> EngineeringOutcome:
-        _validate_request(request)
-        decision = validate_mechanism_selection(request.decision)
+    def inspect(self, mode: Intent, source: Path | None) -> InspectionBundle:
+        if not isinstance(mode, Intent):
+            raise ValueError("mode must be explicitly supplied")
+        if mode is Intent.CREATE:
+            if source is not None:
+                raise ValueError("Create inspection does not accept a source Skill")
+            manifest = None
+            snapshot = None
+            baseline_digest = None
+            findings: tuple[RuleFinding, ...] = ()
+            signals: tuple[CheckResult, ...] = ()
+        else:
+            if source is None:
+                raise ValueError(f"{mode.value} inspection requires a source Skill")
+            source = source.resolve(strict=True)
+            snapshot = snapshot_tree(source)
+            manifest = build_artifact_manifest(source, mode, None)
+            baseline_digest = manifest.content_digest
+            findings = detect_rule_bloat(extract_rule_units(source), history=None)
+            signals = signal_evidence(findings)
         self.state_history.clear()
         self._record(LifecycleState.DISCOVERED)
-        session = _session_for(request)
-        state = LifecycleState.DISCOVERED
+        self._record(LifecycleState.INSPECTED)
+        providers = _inspect_provider_evidence(
+            self._provider_gateway, source.name if source is not None else "new-skill"
+        )
+        return InspectionBundle(
+            str(uuid4()), mode, source, manifest, snapshot, baseline_digest, signals,
+            findings, tuple(item.finding_id for item in findings),
+            tuple(sorted(CAPABILITIES)), providers, datetime.now(UTC).isoformat(),
+            TOOL_SCHEMA_VERSION,
+        )
 
-        if request.intent is Intent.AUDIT_ONLY:
-            artifact = request.source
-            state = self._move(state, LifecycleState.AUDITED, request, session)
-            state = self._move(state, LifecycleState.CLASSIFIED, request, session)
-            state = self._move(state, LifecycleState.MECHANISM_SELECTED, request, session)
-            state = self._move(state, LifecycleState.AUDITED, request, session)
-        elif request.intent is Intent.AUDIT_OPTIMIZE:
-            artifact = request.source
-            state = self._move(state, LifecycleState.AUDITED, request, session)
-            state = self._move(state, LifecycleState.CLASSIFIED, request, session)
-            state = self._move(state, LifecycleState.MECHANISM_SELECTED, request, session)
-            if request.candidate is not None:
-                artifact = session.stage_candidate(request.candidate, request.target_parent)
-                state = self._move(state, LifecycleState.STAGED, request, session, modification_needed=True)
-                state = self._move(state, LifecycleState.AUDITED, request, session, modification_needed=True)
-            else:
-                state = self._move(state, LifecycleState.AUDITED, request, session)
-        else:
-            artifact = session.stage_candidate(request.candidate, request.target_parent)
-            state = self._move(state, LifecycleState.STAGED, request, session, modification_needed=True)
-            state = self._move(state, LifecycleState.CLASSIFIED, request, session, modification_needed=True)
-            state = self._move(state, LifecycleState.MECHANISM_SELECTED, request, session, modification_needed=True)
-            state = self._move(state, LifecycleState.AUDITED, request, session, modification_needed=True)
+    def validate(self, inspection: InspectionBundle, decision: DecisionRecord,
+                 governance_decisions: tuple[GovernanceDecision, ...], *,
+                 candidate: Path | None, target_parent: Path,
+                 authorized_to_modify: bool,
+                 behavioral_runner: Callable[[Path], CheckResult] | None = None,
+                 regression_runner: Callable[[Path], CheckResult] | None = None,
+                 publish_requested: bool = False,
+                 project_policy: Path | None = None) -> ValidationBundle:
+        _validate_inspection(inspection)
+        _validate_decision(decision, inspection.mode)
+        _verify_inspection_fresh(inspection)
+        governed = validate_governance_decisions(inspection.findings, governance_decisions)
+        actionable = {item.finding_id for item in inspection.findings if item.confidence > 0}
+        decided = {item.finding_id for item in governed}
+        if missing := sorted(actionable - decided):
+            raise ValueError("missing governance decisions: " + ", ".join(missing))
 
-        if artifact is None:
-            raise ValueError("artifact is required")
-        manifest = build_artifact_manifest(artifact, request.intent, session.source_digest)
-        evidence = validate_skill_structure(manifest) + validate_references(manifest)
-        if request.behavioral_runner is not None:
-            evidence += (request.behavioral_runner(artifact),)
-        elif request.intent is Intent.CREATE:
-            evidence += (_missing_behavioral_check(manifest.skill_name),)
-        if decision.regression_disposition is RegressionDisposition.REQUIRED and request.regression_runner is not None:
-            evidence += (request.regression_runner(artifact),)
-        elif decision.regression_disposition is RegressionDisposition.REQUIRED:
-            evidence += (_missing_regression_check(manifest.skill_name),)
-        rule_findings = detect_rule_bloat(extract_rule_units(artifact), history=None)
-        evidence += signal_evidence(rule_findings)
-        validated_governance = validate_governance_decisions(rule_findings, request.governance_decisions)
-        evidence += governance_evidence(validated_governance)
-        if request.candidate is not None:
-            evidence += (_governance_coverage(rule_findings, validated_governance, manifest.skill_name),)
-        if decision.primary_issue_class is PrimaryIssueClass.INSUFFICIENT_EVIDENCE:
-            evidence += (_diagnostic_failure(manifest.skill_name),)
-
-        collector = EvidenceCollector()
-        for result in evidence:
-            collector.add(result)
-        if self._provider_gateway is not None:
-            provider_result = self._provider_gateway.invoke(
-                AUDIT_SKILL, {"subject": manifest.skill_name}, formal_run=True
+        target_parent = target_parent.resolve(strict=True)
+        session = _session_for_inspection(inspection)
+        read_only_validation = inspection.mode is Intent.AUDIT_ONLY or (
+            inspection.mode is Intent.AUDIT_OPTIMIZE and candidate is None
+        )
+        if read_only_validation:
+            if candidate is not None:
+                raise ValueError("Audit Only cannot accept a publishable candidate")
+            if inspection.source_path is None:
+                raise ValueError("Audit Only requires a source")
+            artifact = inspection.source_path
+            execution_artifact = (
+                session.prepare_audit_snapshot()
+                if inspection.mode is Intent.AUDIT_ONLY
+                else artifact
             )
-            collector.add(provider_result_to_check_result(provider_result, subject=manifest.skill_name))
-        evidence = collector.snapshot()
-        state = self._move(
-            state,
-            LifecycleState.VALIDATED,
-            request,
-            session,
-            modification_needed=request.candidate is not None,
-        )
-        semantic_confirmed = _semantic_confirmation_matches(
-            request.semantic_confirmation, manifest.content_digest
-        )
-        candidate_requires_publish = request.candidate is not None
-        gate = adjudicate(
-            GateContext(
-                intent=request.intent,
-                state=LifecycleState.VALIDATED,
-                authorized_to_modify=request.authorized_to_modify,
-                candidate_requires_publish=candidate_requires_publish,
-                workspace_publishable=session.staging is not None,
-                decision=decision,
-                semantic_confirmed=semantic_confirmed,
-                publish_requested=request.publish_requested,
-            ),
-            evidence,
-            policy=load_gate_policy(request.project_policy),
-        )
-        target = LifecycleState.GATE_PASSED if gate.verdict.value == "PASS" else LifecycleState.GATE_FAILED
-        self._move(state, target, request, session, modification_needed=candidate_requires_publish)
-        workspace_diff = session.diff(artifact)
+        else:
+            if candidate is None:
+                raise ValueError("Codex must supply a complete candidate")
+            if not authorized_to_modify:
+                raise ValueError("candidate staging requires modification authorization")
+            if inspection.source_path is not None and candidate.resolve() == inspection.source_path.resolve():
+                raise ValueError("candidate must be separate from the source Skill")
+            candidate_findings = detect_rule_bloat(extract_rule_units(candidate), history=None)
+            uninspected = sorted(
+                item.finding_id
+                for item in candidate_findings
+                if item.confidence > 0 and item.finding_id not in inspection.finding_ids
+            )
+            if uninspected:
+                raise ValueError(
+                    "candidate introduces uninspected actionable findings: "
+                    + ", ".join(uninspected)
+                )
+            artifact = session.stage_candidate(candidate, target_parent)
+            execution_artifact = artifact
 
-        if gate.verdict.value == "FAIL":
-            if request.intent is Intent.AUDIT_ONLY:
-                return _audit_failure(request.source, gate, workspace_diff, evidence)
-            raise PipelineBlockedError(gate, artifact, workspace_diff, evidence)
-        if session.staging is not None:
-            session.bind_confirmed_artifact(artifact, manifest.content_digest)
-        return EngineeringOutcome(
-            "Validated Complete Skill",
-            artifact,
-            gate,
-            (),
-            workspace_diff,
-            session if gate.publish_authorized else None,
-            evidence,
+        self._record(LifecycleState.CLASSIFIED)
+        self._record(LifecycleState.MECHANISM_SELECTED)
+        if inspection.mode is not Intent.AUDIT_ONLY:
+            self._record(LifecycleState.STAGED)
+
+        commands: list[CheckResult] = []
+        source_checks: list[bool] = []
+        try:
+            if behavioral_runner is not None:
+                commands.append(behavioral_runner(execution_artifact))
+                if inspection.mode is Intent.AUDIT_ONLY:
+                    source_checks.append(session.verify_source_unchanged())
+            elif inspection.mode is Intent.CREATE:
+                commands.append(_missing_behavioral_check(execution_artifact.name))
+            if decision.regression_disposition is RegressionDisposition.REQUIRED:
+                if regression_runner is None:
+                    commands.append(_missing_regression_check(execution_artifact.name))
+                else:
+                    commands.append(regression_runner(execution_artifact))
+                    if inspection.mode is Intent.AUDIT_ONLY:
+                        source_checks.append(session.verify_source_unchanged())
+            if inspection.mode is Intent.AUDIT_ONLY:
+                source_checks.append(session.verify_source_unchanged())
+
+            manifest = build_artifact_manifest(artifact, inspection.mode, inspection.baseline_digest)
+            evidence = (
+                validate_skill_structure(manifest) + validate_references(manifest)
+                + tuple(commands) + inspection.signals + governance_evidence(governed)
+            )
+            if decision.primary_issue_class is PrimaryIssueClass.INSUFFICIENT_EVIDENCE:
+                evidence += (_diagnostic_failure(manifest.skill_name),)
+            if inspection.mode is Intent.AUDIT_ONLY:
+                evidence += (_source_integrity_evidence(session, source_checks),)
+            collector = EvidenceCollector()
+            for item in evidence:
+                collector.add(item)
+            deterministic = collector.snapshot()
+            advisory = tuple(_provider_evidence_to_check(item, manifest.skill_name)
+                             for item in inspection.provider_evidence)
+            diff = session.source_diff() if inspection.mode is Intent.AUDIT_ONLY else session.diff(artifact)
+            audit_execution = None
+            assessment = None
+            if inspection.mode is Intent.AUDIT_ONLY:
+                audit_execution = (
+                    AuditExecution.COMPLETE
+                    if all(source_checks) and all(item.status is CheckStatus.PASS for item in commands)
+                    else AuditExecution.INCOMPLETE
+                )
+                assessment = _artifact_assessment(audit_execution, deterministic, advisory)
+        finally:
+            if inspection.mode is Intent.AUDIT_ONLY:
+                session.cleanup_audit_snapshot()
+
+        self._record(LifecycleState.VALIDATED_PENDING_CONFIRMATION)
+        return ValidationBundle(
+            str(uuid4()), inspection.inspection_id, inspection.mode, inspection.source_path,
+            inspection.baseline_snapshot, inspection.baseline_digest, artifact,
+            session.staging, target_parent, manifest, manifest.content_digest, decision,
+            governed, deterministic, advisory, diff,
+            _checks_fingerprint(deterministic, advisory), authorized_to_modify,
+            publish_requested, project_policy, audit_execution=audit_execution,
+            artifact_assessment=assessment,
         )
+
+    def confirm(self, validation: ValidationBundle,
+                confirmation: SemanticConfirmation) -> EngineeringOutcome:
+        if validation.lifecycle_state is not LifecycleState.VALIDATED_PENDING_CONFIRMATION:
+            raise ValueError("validation is not pending semantic confirmation")
+        if _checks_fingerprint(validation.deterministic_evidence,
+                               validation.advisory_evidence) != validation.checks_fingerprint:
+            raise ValueError("validation checks changed after validation")
+        source_unchanged = _source_matches_validation(validation)
+        if not source_unchanged and validation.intent not in {Intent.CREATE, Intent.AUDIT_ONLY}:
+            raise ValueError("source changed after validation")
+        if digest_tree(validation.artifact_path) != validation.artifact_digest:
+            if validation.intent is Intent.AUDIT_ONLY:
+                source_unchanged = False
+            else:
+                raise ValueError("candidate changed after validation")
+        semantic_confirmed = _semantic_confirmation_matches(confirmation, validation.artifact_digest)
+        deterministic = validation.deterministic_evidence
+        audit_execution = validation.audit_execution
+        assessment = validation.artifact_assessment
+        if validation.intent is Intent.AUDIT_ONLY:
+            if not source_unchanged:
+                audit_execution = AuditExecution.INCOMPLETE
+                assessment = ArtifactAssessment.UNKNOWN
+                semantic_confirmed = False
+                deterministic = tuple(
+                    item for item in deterministic if item.check_id != "B10"
+                ) + (_validation_source_integrity_failure(validation),)
+            evidence = deterministic + validation.advisory_evidence
+            gate = _audit_gate(
+                audit_execution, assessment, semantic_confirmed,
+                validation.project_policy, deterministic,
+                validation.advisory_evidence,
+            )
+            lifecycle = _audit_terminal_state(audit_execution, assessment)
+            findings = _minimal_audit_findings(
+                validation, assessment, deterministic
+            )
+            outcome_type = gate.outcome.value
+            session = None
+        else:
+            evidence = deterministic + validation.advisory_evidence
+            gate = adjudicate(
+                GateContext(
+                    validation.intent, LifecycleState.VALIDATED,
+                    validation.authorized_to_modify,
+                    validation.staging_path is not None,
+                    validation.staging_path is not None, validation.decision,
+                    semantic_confirmed, validation.publish_requested,
+                ), evidence, policy=load_gate_policy(validation.project_policy),
+            )
+            if gate.verdict is GateVerdict.FAIL:
+                self._record(LifecycleState.GATE_FAILED)
+                raise PipelineBlockedError(gate, validation.artifact_path,
+                                           validation.workspace_diff, evidence)
+            session = (
+                _publication_session(validation, confirmation)
+                if gate.publish_authorized else None
+            )
+            lifecycle = (LifecycleState.READY_TO_PUBLISH
+                         if gate.outcome is GateOutcome.READY_TO_PUBLISH
+                         else LifecycleState.VALIDATED)
+            findings = ()
+            outcome_type = "Validated Complete Skill"
+        self._record(lifecycle)
+        return EngineeringOutcome(
+            outcome_type, validation.artifact_path, gate, findings,
+            _current_source_diff(validation) if validation.intent is Intent.AUDIT_ONLY
+            else validation.workspace_diff,
+            session if gate.publish_authorized else None, evidence,
+            deterministic, validation.advisory_evidence,
+            audit_execution, assessment, lifecycle, validation, confirmation,
+        )
+
+    def run(self, request: EngineeringRequest) -> EngineeringOutcome:
+        _validate_compatibility_request(request)
+        inspection = self.inspect(request.intent, request.source)
+        validation = self.validate(
+            inspection, request.decision, request.governance_decisions,
+            candidate=request.candidate, target_parent=request.target_parent,
+            authorized_to_modify=request.authorized_to_modify,
+            behavioral_runner=request.behavioral_runner,
+            regression_runner=request.regression_runner,
+            publish_requested=request.publish_requested,
+            project_policy=request.project_policy,
+        )
+        confirmation = request.semantic_confirmation or SemanticConfirmation(
+            "missing", "No Codex confirmation was supplied", "MISSING"
+        )
+        return self.confirm(validation, confirmation)
 
 
 def publish(outcome: EngineeringOutcome) -> PublishResult:
-    """Perform the separately requested atomic publication of a ready outcome."""
     if outcome.publication_session is None:
         raise ValueError("outcome has no publication-ready workspace")
     return publish_atomic(outcome.publication_session, outcome.gate_result)
 
 
-def _validate_request(request: EngineeringRequest) -> None:
-    if not isinstance(request.intent, Intent):
-        raise ValueError("intent must be explicitly supplied by Codex")
-    if request.decision.intent is not request.intent:
-        raise ValueError("DecisionRecord intent must match the explicit request intent")
-    validate_classification(request.decision)
-    if not request.requirement.strip():
-        raise ValueError("requirement must be nonblank")
-    if request.intent is Intent.CREATE:
-        if request.source is not None:
-            raise ValueError("Create does not accept a source Skill")
-    elif request.source is None:
-        raise ValueError(f"{request.intent.value} requires a source Skill")
-    if request.intent is Intent.AUDIT_ONLY and request.candidate is not None:
-        raise ValueError("Audit Only cannot accept a candidate")
-    if request.intent in {Intent.CREATE, Intent.MODIFY, Intent.FIX}:
-        if request.candidate is None:
-            raise ValueError("Codex must supply a complete candidate for this mode")
-        if not request.authorized_to_modify:
-            raise ValueError("candidate staging requires modification authorization")
-    if request.intent is Intent.AUDIT_OPTIMIZE and request.candidate is not None and not request.authorized_to_modify:
-        raise ValueError("Audit + Optimize candidate staging requires modification authorization")
-    if not request.target_parent.exists() or not request.target_parent.is_dir():
-        raise ValueError("target parent must be an existing directory")
-    if request.candidate is not None:
-        published_name = (
-            request.candidate.name if request.intent is Intent.CREATE else request.source.name
-        )
-        publish_target = request.target_parent.resolve(strict=False) / published_name
-        if request.candidate.resolve(strict=False) == publish_target:
-            raise ValueError("candidate must be outside its publication destination")
+def _validate_inspection(inspection: InspectionBundle) -> None:
+    if not isinstance(inspection, InspectionBundle) or not inspection.inspection_id:
+        raise ValueError("a valid InspectionBundle is required")
+    if inspection.tool_schema_version != TOOL_SCHEMA_VERSION:
+        raise ValueError("inspection schema version is unsupported")
+    if tuple(item.finding_id for item in inspection.findings) != inspection.finding_ids:
+        raise ValueError("inspection finding IDs do not match findings")
 
 
-def _session_for(request: EngineeringRequest) -> WorkspaceSession:
-    if request.intent is Intent.CREATE:
+def _validate_decision(decision: DecisionRecord, intent: Intent) -> None:
+    if not isinstance(decision, DecisionRecord):
+        raise ValueError("Codex DecisionRecord is required")
+    if decision.intent is not intent:
+        raise ValueError("DecisionRecord intent must match inspection mode")
+    validate_classification(decision)
+    validate_mechanism_selection(decision)
+
+
+def _verify_inspection_fresh(inspection: InspectionBundle) -> None:
+    if inspection.source_path is None:
+        return
+    if digest_tree(inspection.source_path) != inspection.baseline_digest:
+        raise ValueError("stale inspection: source digest no longer matches baseline")
+    if inspection.baseline_snapshot is None or (
+        snapshot_tree(inspection.source_path).content_digest
+        != inspection.baseline_snapshot.content_digest
+    ):
+        raise ValueError("stale inspection: source manifest no longer matches baseline")
+
+
+def _session_for_inspection(inspection: InspectionBundle) -> WorkspaceSession:
+    if inspection.mode is Intent.CREATE:
         return WorkspaceSession.for_create()
-    return WorkspaceSession.for_existing(request.intent, request.source)
+    if inspection.source_path is None:
+        raise ValueError("source is required")
+    session = WorkspaceSession.for_existing(inspection.mode, inspection.source_path)
+    session.source_snapshot = inspection.baseline_snapshot
+    session.source_digest = inspection.baseline_digest
+    return session
 
 
-def _context(
-    request: EngineeringRequest,
-    session: WorkspaceSession,
-    *,
-    modification_needed: bool = False,
-) -> TransitionContext:
-    return TransitionContext(
-        intent=request.intent,
-        authorized_to_modify=request.authorized_to_modify,
-        defect_found=bool(request.failure_evidence),
-        staging_exists=session.staging is not None,
-        audit_cycle=0,
-        validation_cycle=0,
-        modification_needed=modification_needed,
+def _inspect_provider_evidence(gateway: ProviderGateway | None,
+                               subject: str) -> tuple[ProviderEvidence, ...]:
+    records: list[ProviderEvidence] = []
+    invoked = {AUDIT_SKILL, CHECK_SKILL_CONFORMANCE}
+    for capability in sorted(CAPABILITIES):
+        if gateway is None or capability not in invoked:
+            records.append(ProviderEvidence(
+                f"optional.none.{capability.lower()}", capability, "INSPECT",
+                CheckStatus.NOT_EXECUTED,
+                "optional Provider was not requested or available",
+            ))
+        else:
+            records.append(_provider_record(
+                gateway.invoke(capability, {"subject": subject}, formal_run=True),
+                "INSPECT",
+            ))
+    return tuple(records)
+
+
+def _provider_record(result: ProviderResult, phase: str) -> ProviderEvidence:
+    unavailable = {ProviderStatus.UNAVAILABLE, ProviderStatus.INVALID_OUTPUT,
+                   ProviderStatus.TIMEOUT, ProviderStatus.INCOMPATIBLE}
+    status = (CheckStatus.NOT_EXECUTED if result.provider_status in unavailable
+              else CheckStatus.WARN if result.provider_status is ProviderStatus.DEGRADED
+              or result.findings else CheckStatus.PASS)
+    summary = "; ".join((*result.findings, *result.evidence, *result.limitations))
+    return ProviderEvidence(result.provider_id, result.capability, phase, status,
+                            summary or "provider returned no details")
+
+
+def _provider_evidence_to_check(item: ProviderEvidence, subject: str) -> CheckResult:
+    return CheckResult(
+        f"provider.{item.capability.lower()}", f"provider:{item.provider_id}",
+        subject, False, item.status, False, item.reproducible, 1.0,
+        (f"invocation_phase={item.invocation_phase}", item.summary),
+        LifecycleState.VALIDATED_PENDING_CONFIRMATION, subject,
     )
 
 
-def _semantic_confirmation_matches(
-    confirmation: SemanticConfirmation | None, artifact_digest: str
-) -> bool:
-    if confirmation is None:
+def _source_integrity_evidence(session: WorkspaceSession,
+                               checks: list[bool]) -> CheckResult:
+    changed = not all(checks)
+    diff = session.source_diff()
+    details = (("source baseline changed during Audit Only; change origin is not attributed",
+                f"added={list(diff.added)}", f"modified={list(diff.modified)}",
+                f"deleted={list(diff.deleted)}") if changed else
+               ("source baseline remained unchanged at every verification point",))
+    return CheckResult(
+        "B10", "engine.source-integrity", str(session.source), True,
+        CheckStatus.FAIL if changed else CheckStatus.PASS, True, True, 1.0,
+        details, LifecycleState.VALIDATED_PENDING_CONFIRMATION, str(session.source),
+    )
+
+
+def _artifact_assessment(execution: AuditExecution,
+                         deterministic: tuple[CheckResult, ...],
+                         advisory: tuple[CheckResult, ...]) -> ArtifactAssessment:
+    if execution is AuditExecution.INCOMPLETE:
+        return ArtifactAssessment.UNKNOWN
+    target = tuple(item for item in deterministic if item.source not in {
+        "engine.source-integrity", "cli.command", "behavioral.runner", "regression.runner"
+    })
+    if any(item.required and item.status in {CheckStatus.FAIL, CheckStatus.ERROR}
+           for item in target):
+        return ArtifactAssessment.BLOCKING_FINDINGS
+    if any(item.status is CheckStatus.WARN for item in (*target, *advisory)):
+        return ArtifactAssessment.FINDINGS
+    return ArtifactAssessment.VALID
+
+
+def _checks_fingerprint(deterministic: tuple[CheckResult, ...],
+                        advisory: tuple[CheckResult, ...]) -> str:
+    payload = {"deterministic": [asdict(item) for item in deterministic],
+               "advisory": [asdict(item) for item in advisory]}
+    encoded = json.dumps(payload, default=_json_default, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _json_default(value: object) -> object:
+    if hasattr(value, "value"):
+        return value.value
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"unsupported value: {type(value)!r}")
+
+
+def _source_matches_validation(validation: ValidationBundle) -> bool:
+    if validation.source_path is None:
+        return True
+    if validation.baseline_snapshot is None:
+        return False
+    return (digest_tree(validation.source_path) == validation.baseline_digest
+            and snapshot_tree(validation.source_path).content_digest
+            == validation.baseline_snapshot.content_digest)
+
+
+def _semantic_confirmation_matches(confirmation: SemanticConfirmation,
+                                   artifact_digest: str) -> bool:
+    if confirmation.confirmed_by != "CODEX":
         return False
     try:
         validate_contract("semantic-confirmation", asdict(confirmation))
@@ -297,76 +541,128 @@ def _semantic_confirmation_matches(
     return confirmation.artifact_digest == artifact_digest
 
 
-def _governance_coverage(
-    findings: tuple[object, ...],
-    decisions: tuple[GovernanceDecision, ...],
-    subject: str,
-) -> CheckResult:
-    actionable = {finding.finding_id for finding in findings if finding.confidence > 0}
-    decided = {decision.finding_id for decision in decisions}
-    missing = tuple(sorted(actionable - decided))
-    status = CheckStatus.FAIL if missing else CheckStatus.PASS
-    message = (
-        "missing Codex governance decisions: " + ", ".join(missing)
-        if missing
-        else "Codex supplied decisions for every actionable rule signal"
+def _audit_gate(execution: AuditExecution | None,
+                assessment: ArtifactAssessment | None, semantic_confirmed: bool,
+                project_policy: Path | None,
+                deterministic: tuple[CheckResult, ...] = (),
+                advisory: tuple[CheckResult, ...] = ()) -> GateResult:
+    policy_version = str(load_gate_policy(project_policy)["policy_version"])
+    if execution is not AuditExecution.COMPLETE or not semantic_confirmed:
+        return GateResult(
+            GateVerdict.FAIL, GateOutcome.AUDIT_INCOMPLETE,
+            ("B10: Audit execution is incomplete or source integrity is untrusted",
+             "B12: Codex semantic confirmation for the validated artifact is absent"),
+            (), "Audit execution incomplete.", "Artifact assessment is UNKNOWN.",
+            False, False, policy_version,
+        )
+    outcome = {
+        ArtifactAssessment.VALID: GateOutcome.AUDIT_COMPLETE_VALID,
+        ArtifactAssessment.FINDINGS: GateOutcome.AUDIT_COMPLETE_FINDINGS,
+        ArtifactAssessment.BLOCKING_FINDINGS: GateOutcome.AUDIT_COMPLETE_BLOCKING_FINDINGS,
+    }[assessment]
+    warnings = tuple(
+        detail
+        for item in (*deterministic, *advisory)
+        if item.status in {CheckStatus.WARN, CheckStatus.FAIL}
+        for detail in (f"{item.check_id}: {'; '.join(item.evidence)}",)
     )
+    if assessment is not ArtifactAssessment.VALID:
+        warnings += (f"artifact_assessment={assessment.value}",)
+    return GateResult(GateVerdict.PASS, outcome, (), warnings,
+                      "Audit execution complete.",
+                      f"Artifact assessment is {assessment.value}.", True, False,
+                      policy_version)
+
+
+def _audit_terminal_state(execution: AuditExecution | None,
+                          assessment: ArtifactAssessment | None) -> LifecycleState:
+    if execution is not AuditExecution.COMPLETE:
+        return LifecycleState.AUDIT_INCOMPLETE
+    return {
+        ArtifactAssessment.VALID: LifecycleState.AUDIT_COMPLETE_VALID,
+        ArtifactAssessment.FINDINGS: LifecycleState.AUDIT_COMPLETE_FINDINGS,
+        ArtifactAssessment.BLOCKING_FINDINGS: LifecycleState.AUDIT_COMPLETE_BLOCKING_FINDINGS,
+    }.get(assessment, LifecycleState.AUDIT_INCOMPLETE)
+
+
+def _minimal_audit_findings(validation: ValidationBundle,
+                            assessment: ArtifactAssessment | None,
+                            deterministic: tuple[CheckResult, ...] | None = None) -> tuple[dict[str, str], ...]:
+    if assessment in {None, ArtifactAssessment.VALID}:
+        return ()
+    results = tuple(item for item in (deterministic or validation.deterministic_evidence)
+                    if item.status in {CheckStatus.FAIL, CheckStatus.ERROR, CheckStatus.WARN}
+                    and not item.check_id.startswith("rule-signal."))
+    return tuple({
+        "finding_id": item.check_id,
+        "affected_path": item.artifact_reference or str(validation.artifact_path),
+        "blocking_reason": "; ".join(item.evidence),
+        "required_next_action": "Codex must review the finding before any remediation",
+    } for item in results)
+
+
+def _current_source_diff(validation: ValidationBundle) -> WorkspaceDiff:
+    if validation.source_path is None or validation.baseline_snapshot is None:
+        return WorkspaceDiff((), (), ())
+    from engine.workspace import diff_snapshots
+    return diff_snapshots(validation.baseline_snapshot,
+                          snapshot_tree(validation.source_path))
+
+
+def _validation_source_integrity_failure(validation: ValidationBundle) -> CheckResult:
+    diff = _current_source_diff(validation)
     return CheckResult(
-        "governance.coverage", "codex.governance", subject, True, status,
-        True, True, 1.0, (message,), LifecycleState.VALIDATED, subject,
+        "B10", "engine.source-integrity", str(validation.source_path), True,
+        CheckStatus.FAIL, True, True, 1.0,
+        (
+            "source baseline changed after validation; change origin is not attributed",
+            f"added={list(diff.added)}",
+            f"modified={list(diff.modified)}",
+            f"deleted={list(diff.deleted)}",
+        ),
+        LifecycleState.AUDIT_INCOMPLETE,
+        str(validation.source_path),
     )
+
+
+def _publication_session(validation: ValidationBundle,
+                         confirmation: SemanticConfirmation) -> WorkspaceSession:
+    session = WorkspaceSession(
+        validation.intent, validation.source_path, validation.staging_path,
+        validation.baseline_digest, source_snapshot=validation.baseline_snapshot,
+    )
+    session.bind_confirmed_artifact(validation.artifact_path,
+                                    confirmation.artifact_digest)
+    return session
 
 
 def _diagnostic_failure(subject: str) -> CheckResult:
-    return CheckResult(
-        "diagnostic.evidence", "codex.diagnostics", subject, True,
-        CheckStatus.FAIL, True, True, 1.0,
-        ("Codex recorded insufficient failure evidence",),
-        LifecycleState.VALIDATED, subject,
-    )
+    return CheckResult("diagnostic.evidence", "codex.diagnostics", subject, True,
+                       CheckStatus.FAIL, True, True, 1.0,
+                       ("Codex recorded insufficient failure evidence",),
+                       LifecycleState.VALIDATED_PENDING_CONFIRMATION, subject)
 
 
 def _missing_behavioral_check(subject: str) -> CheckResult:
-    return CheckResult(
-        "behavioral.create", "behavioral.runner", subject, True,
-        CheckStatus.NOT_EXECUTED, True, True, 1.0,
-        ("No Create behavioral test was executed",),
-        LifecycleState.VALIDATED, subject,
-    )
+    return CheckResult("behavioral.create", "behavioral.runner", subject, True,
+                       CheckStatus.NOT_EXECUTED, True, True, 1.0,
+                       ("No Create behavioral test was executed",),
+                       LifecycleState.VALIDATED_PENDING_CONFIRMATION, subject)
 
 
 def _missing_regression_check(subject: str) -> CheckResult:
-    return CheckResult(
-        "B07", "regression.runner", subject, True,
-        CheckStatus.NOT_EXECUTED, True, True, 1.0,
-        ("Required regression command was not supplied",),
-        LifecycleState.VALIDATED, subject,
-    )
+    return CheckResult("B07", "regression.runner", subject, True,
+                       CheckStatus.NOT_EXECUTED, True, True, 1.0,
+                       ("Required regression command was not supplied",),
+                       LifecycleState.VALIDATED_PENDING_CONFIRMATION, subject)
 
 
-def _audit_failure(
-    source: Path | None,
-    gate: GateResult,
-    workspace_diff: WorkspaceDiff,
-    evidence: tuple[CheckResult, ...],
-) -> EngineeringOutcome:
-    if source is None:
-        raise ValueError("Audit Only failure requires a source Skill")
-    findings = tuple(
-        {
-            "finding_id": finding.split(":", 1)[0].strip(),
-            "affected_path": str(source),
-            "blocking_reason": finding,
-            "required_next_action": "Codex must address or explicitly resolve the blocking evidence",
-        }
-        for finding in gate.blocking_findings
-    )
-    return EngineeringOutcome(
-        "Unchanged Skill + Minimal Blocking Findings",
-        source,
-        gate,
-        findings,
-        workspace_diff,
-        None,
-        evidence,
-    )
+def _validate_compatibility_request(request: EngineeringRequest) -> None:
+    if not request.requirement.strip():
+        raise ValueError("requirement must be nonblank")
+    if request.intent is Intent.AUDIT_ONLY and request.candidate is not None:
+        raise ValueError("Audit Only cannot accept a candidate")
+    if request.intent in {Intent.CREATE, Intent.MODIFY, Intent.FIX} and request.candidate is None:
+        raise ValueError("Codex must supply a complete candidate for this mode")
+    if request.candidate is not None and not request.authorized_to_modify:
+        raise ValueError("candidate staging requires modification authorization")

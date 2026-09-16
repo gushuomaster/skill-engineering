@@ -49,3 +49,18 @@ def test_semantic_confirmation_requires_codex_and_exact_digest() -> None:
     payload["confirmed_by"] = "provider"
     with pytest.raises(ValidationError):
         validate_contract("semantic-confirmation", payload)
+
+
+def test_inspection_bundle_schema_accepts_engine_payload(tmp_path: Path) -> None:
+    from engine.models import Intent
+    from engine.orchestrator import PipelineOrchestrator
+    from engine.serialization import to_data
+
+    source = tmp_path / "demo"
+    source.mkdir()
+    (source / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: Demo skill.\n---\n\n# Demo\n",
+        encoding="utf-8",
+    )
+    inspection = PipelineOrchestrator().inspect(Intent.AUDIT_ONLY, source)
+    validate_contract("inspection-bundle", to_data(inspection))

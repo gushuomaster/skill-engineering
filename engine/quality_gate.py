@@ -429,7 +429,11 @@ def adjudicate(
         or not context.candidate_requires_publish
         or not context.publish_requested
     ):
-        outcome = GateOutcome.UNCHANGED_VALIDATED
+        outcome = (
+            GateOutcome.UNCHANGED_VALIDATED
+            if context.intent is Intent.AUDIT_ONLY
+            else GateOutcome.VALIDATED
+        )
     else:
         outcome = GateOutcome.REMEDIATION_REQUIRED
 

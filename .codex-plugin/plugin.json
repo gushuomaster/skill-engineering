@@ -1,6 +1,6 @@
 {
   "name": "skill-engineering",
-  "version": "1.0.2+codex.20260916014822",
+  "version": "1.0.2+codex.20260916071634",
   "description": "Deterministic engineering support for Codex-authored Skill creation, repair, audit, validation, and release.",
   "author": {
     "name": "Local developer"

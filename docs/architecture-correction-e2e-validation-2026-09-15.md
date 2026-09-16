@@ -1,5 +1,7 @@
 # 架构纠偏最终端到端验收报告
 
+> **历史验收，非当前权威流程。** 当前四阶段架构与状态语义见 [architecture-correction-2026-09-15.md](architecture-correction-2026-09-15.md) 及 2026-09-16 最终复验报告。
+
 ## 验收结论
 
 ```text

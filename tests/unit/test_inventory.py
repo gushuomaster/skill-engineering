@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 
 import engine.inventory as inventory
-from engine.inventory import assert_no_scope_escape, build_artifact_manifest, digest_tree
+from engine.inventory import assert_no_scope_escape, build_artifact_manifest, digest_tree, snapshot_tree
+from engine.workspace import diff_snapshots
 from engine.models import Intent
 
 
@@ -111,3 +112,25 @@ def test_scope_escape_rejects_internal_reparse_point_without_symlink_privilege(
 
     with pytest.raises(ValueError, match="link or reparse point"):
         assert_no_scope_escape(tmp_path)
+
+
+def test_snapshot_diff_uses_immutable_baseline_for_recursive_changes(tmp_path: Path) -> None:
+    root = tmp_path / "skill"
+    nested = root / "references" / "deep"
+    nested.mkdir(parents=True)
+    (root / "SKILL.md").write_text("before", encoding="utf-8")
+    (nested / "delete.md").write_text("delete", encoding="utf-8")
+    (root / "rename.md").write_text("rename", encoding="utf-8")
+    baseline = snapshot_tree(root)
+
+    (root / "SKILL.md").write_text("after", encoding="utf-8")
+    (nested / "delete.md").unlink()
+    (root / "rename.md").rename(root / "renamed.md")
+    (nested / "added.md").write_text("added", encoding="utf-8")
+    diff = diff_snapshots(baseline, snapshot_tree(root))
+
+    assert diff.added == ("references/deep/added.md", "renamed.md")
+    assert diff.modified == ("SKILL.md",)
+    assert diff.deleted == ("references/deep/delete.md", "rename.md")
+    assert all(entry.entry_type in {"file", "directory"} for entry in baseline.entries)
+    assert next(entry for entry in baseline.entries if entry.path == "SKILL.md").content_hash

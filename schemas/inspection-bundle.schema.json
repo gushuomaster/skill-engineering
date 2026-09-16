@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "inspection_id", "mode", "source_path", "baseline_manifest",
+    "baseline_snapshot", "baseline_digest", "signals", "findings",
+    "finding_ids", "provider_capabilities", "provider_evidence", "created_at",
+    "tool_schema_version", "lifecycle_state"
+  ],
+  "properties": {
+    "inspection_id": {"type": "string", "minLength": 1},
+    "mode": {"enum": ["CREATE", "MODIFY", "FIX", "AUDIT_ONLY", "AUDIT_OPTIMIZE"]},
+    "source_path": {"type": ["string", "null"]},
+    "baseline_manifest": {"type": ["object", "null"]},
+    "baseline_snapshot": {"type": ["object", "null"]},
+    "baseline_digest": {"type": ["string", "null"]},
+    "signals": {"type": "array"},
+    "findings": {"type": "array"},
+    "finding_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "provider_capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "provider_evidence": {"type": "array"},
+    "created_at": {"type": "string", "minLength": 1},
+    "tool_schema_version": {"const": "2.0"},
+    "lifecycle_state": {"const": "INSPECTED"}
+  },
+  "additionalProperties": false
+}

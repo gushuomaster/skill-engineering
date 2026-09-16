@@ -8,7 +8,8 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from engine.inventory import assert_no_scope_escape, digest_tree, build_artifact_manifest
+from engine.inventory import assert_no_scope_escape, digest_tree, build_artifact_manifest, snapshot_tree
+from engine.models import DirectorySnapshot
 from engine.models import Intent
 from engine.models import GateResult, GateOutcome, GateVerdict
 
@@ -89,6 +90,8 @@ class WorkspaceSession:
     staging: Path | None
     source_digest: str | None
     confirmed_artifact_digest: str | None = None
+    source_snapshot: DirectorySnapshot | None = None
+    audit_snapshot_root: Path | None = None
 
     @classmethod
     def for_existing(cls, intent: Intent, source: Path) -> "WorkspaceSession":
@@ -96,7 +99,14 @@ class WorkspaceSession:
             raise ValueError("create sessions do not have a source")
         assert_no_scope_escape(source)
         source = source.resolve(strict=False)
-        return cls(intent=intent, source=source, staging=None, source_digest=digest_tree(source))
+        snapshot = snapshot_tree(source)
+        return cls(
+            intent=intent,
+            source=source,
+            staging=None,
+            source_digest=digest_tree(source),
+            source_snapshot=snapshot,
+        )
 
     @classmethod
     def for_create(cls) -> "WorkspaceSession":
@@ -174,7 +184,33 @@ class WorkspaceSession:
         if self.source is None:
             return True
         assert_no_scope_escape(self.source)
+        if self.source_snapshot is not None:
+            return snapshot_tree(self.source).content_digest == self.source_snapshot.content_digest
         return digest_tree(self.source) == self.source_digest
+
+    def prepare_audit_snapshot(self) -> Path:
+        """Copy an Audit Only source to an isolated disposable execution root."""
+        if self.intent is not Intent.AUDIT_ONLY or self.source is None:
+            raise ValueError("audit snapshot requires an Audit Only source")
+        if self.audit_snapshot_root is not None:
+            raise RuntimeError("audit snapshot has already been prepared")
+        root = Path(tempfile.mkdtemp(prefix="skill-engineering-audit-"))
+        artifact = root / self.source.name
+        shutil.copytree(self.source, artifact)
+        assert_no_scope_escape(artifact)
+        self.audit_snapshot_root = root
+        return artifact
+
+    def cleanup_audit_snapshot(self) -> None:
+        if self.audit_snapshot_root is not None:
+            shutil.rmtree(self.audit_snapshot_root, ignore_errors=True)
+            self.audit_snapshot_root = None
+
+    def source_diff(self) -> WorkspaceDiff:
+        """Compare the current source to the immutable snapshot captured at session start."""
+        if self.source is None or self.source_snapshot is None:
+            return WorkspaceDiff((), (), ())
+        return diff_snapshots(self.source_snapshot, snapshot_tree(self.source))
 
     def bind_confirmed_artifact(self, artifact: Path, artifact_digest: str) -> None:
         """Bind publication to the exact staged artifact confirmed by Codex."""
@@ -216,6 +252,31 @@ def diff_trees(source: Path, candidate: Path) -> WorkspaceDiff:
         added=tuple(sorted(set(after) - set(before))),
         modified=tuple(sorted(path for path in set(before) & set(after) if before[path] != after[path])),
         deleted=tuple(sorted(set(before) - set(after))),
+    )
+
+
+def diff_snapshots(before: DirectorySnapshot, after: DirectorySnapshot) -> WorkspaceDiff:
+    """Return a real baseline/current file diff without rereading the baseline path."""
+    before_files = {
+        entry.path: entry
+        for entry in before.entries
+        if entry.entry_type == "file"
+    }
+    after_files = {
+        entry.path: entry
+        for entry in after.entries
+        if entry.entry_type == "file"
+    }
+    return WorkspaceDiff(
+        added=tuple(sorted(set(after_files) - set(before_files))),
+        modified=tuple(
+            sorted(
+                path
+                for path in set(before_files) & set(after_files)
+                if before_files[path] != after_files[path]
+            )
+        ),
+        deleted=tuple(sorted(set(before_files) - set(after_files))),
     )
 
 
@@ -276,7 +337,7 @@ def publish_atomic(session: WorkspaceSession, gate: GateResult) -> PublishResult
                 candidate_digest,
                 _digest_if_loadable(published),
                 workspace_diff,
-                "RECOVERY_FAILED",
+                "PUBLISH_FAILED_UNRECOVERABLE",
             )
             raise PublishRecoveryError("publication and recovery failed", result) from restore_exc
         result = PublishResult(
@@ -287,7 +348,7 @@ def publish_atomic(session: WorkspaceSession, gate: GateResult) -> PublishResult
             candidate_digest,
             _digest_if_loadable(published),
             workspace_diff,
-            "RECOVERED",
+            "PUBLISH_FAILED_RECOVERED",
         )
         raise PublishRecoveryError("publication failed; original restored", result) from exc
 

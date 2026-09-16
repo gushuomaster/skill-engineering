@@ -439,7 +439,7 @@ def test_candidate_without_explicit_publish_request_is_validated_but_not_authori
     result = adjudicate(_context(publish_requested=False), _passing_evidence())
 
     assert result.verdict is GateVerdict.PASS
-    assert result.outcome is GateOutcome.UNCHANGED_VALIDATED
+    assert result.outcome is GateOutcome.VALIDATED
     assert result.publish_authorized is False
 
 

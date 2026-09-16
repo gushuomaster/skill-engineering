@@ -54,7 +54,7 @@ def test_cli_read_only_pass_returns_json_and_exit_zero(tmp_path: Path) -> None:
     assert payload["gate_result"]["publish_authorized"] is False
 
 
-def test_cli_audit_failure_uses_exit_two_without_copy(tmp_path: Path) -> None:
+def test_cli_complete_audit_with_blocking_findings_uses_exit_one_without_copy(tmp_path: Path) -> None:
     source = tmp_path / "broken"
     source.mkdir()
     (source / "SKILL.md").write_text("# broken", encoding="utf-8")
@@ -65,9 +65,11 @@ def test_cli_audit_failure_uses_exit_two_without_copy(tmp_path: Path) -> None:
         "--semantic-rationale", "Codex reviewed the broken Skill",
         "--json", "--target-parent", str(tmp_path),
     )
-    assert result.returncode == 2
+    assert result.returncode == 1
     payload = json.loads(result.stdout)
-    assert payload["outcome_type"] == "Unchanged Skill + Minimal Blocking Findings"
+    assert payload["outcome_type"] == "AUDIT_COMPLETE_BLOCKING_FINDINGS"
+    assert payload["audit_execution"] == "COMPLETE"
+    assert payload["artifact_assessment"] == "BLOCKING_FINDINGS"
     assert not list(tmp_path.glob(".skill-engineering-*"))
 
 

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "validation_id", "inspection_id", "intent", "artifact_path",
+    "artifact_manifest", "artifact_digest", "deterministic_evidence",
+    "advisory_evidence", "workspace_diff", "checks_fingerprint",
+    "pending_semantic_confirmation", "gate_result", "lifecycle_state"
+  ],
+  "properties": {
+    "validation_id": {"type": "string", "minLength": 1},
+    "inspection_id": {"type": "string", "minLength": 1},
+    "intent": {"enum": ["CREATE", "MODIFY", "FIX", "AUDIT_ONLY", "AUDIT_OPTIMIZE"]},
+    "artifact_path": {"type": "string", "minLength": 1},
+    "artifact_manifest": {"type": "object"},
+    "artifact_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "deterministic_evidence": {"type": "array"},
+    "advisory_evidence": {"type": "array"},
+    "workspace_diff": {"type": "object"},
+    "checks_fingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "pending_semantic_confirmation": {"const": true},
+    "gate_result": {"type": "null"},
+    "lifecycle_state": {"const": "VALIDATED_PENDING_CONFIRMATION"}
+  }
+}

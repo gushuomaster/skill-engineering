@@ -1,5 +1,7 @@
 # Skill Engineering 本地 Plugin 安装与 Codex Dogfooding 验收
 
+> **历史验收，非当前权威流程。** 本文保留 2026-09-15 的原始结果；Audit 状态和四阶段 CLI 已在 2026-09-16 重新验收。
+
 ## 结论
 
 最终状态：`LOCAL_PLUGIN_INSTALLED_AND_CODEX_DOGFOOD_VALIDATED`

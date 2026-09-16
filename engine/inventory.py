@@ -5,7 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 
-from engine.models import ArtifactManifest, Intent
+from engine.models import ArtifactManifest, DirectorySnapshot, Intent, TreeEntry
 
 
 _EXECUTABLE_SUFFIXES = frozenset({".bat", ".cmd", ".ps1", ".py", ".sh"})
@@ -59,6 +59,43 @@ def digest_tree(root: Path) -> str:
         digest.update(b"\0")
         digest.update(content)
     return digest.hexdigest()
+
+
+def snapshot_tree(root: Path) -> DirectorySnapshot:
+    """Capture a recursive, content-bound source baseline for later comparison."""
+    assert_no_scope_escape(root)
+    resolved_root = root.resolve(strict=False)
+    entries: list[TreeEntry] = []
+    digest = hashlib.sha256()
+    for path in sorted(
+        resolved_root.rglob("*"), key=lambda item: item.relative_to(resolved_root).as_posix()
+    ):
+        relative = path.relative_to(resolved_root).as_posix()
+        stat = path.stat(follow_symlinks=False)
+        if path.is_dir():
+            entry = TreeEntry(relative, "directory", 0, None, stat.st_mode)
+        elif path.is_file():
+            content = path.read_bytes()
+            entry = TreeEntry(
+                relative,
+                "file",
+                len(content),
+                hashlib.sha256(content).hexdigest(),
+                stat.st_mode,
+            )
+        else:
+            entry = TreeEntry(relative, "other", stat.st_size, None, stat.st_mode)
+        entries.append(entry)
+        for value in (
+            entry.path,
+            entry.entry_type,
+            str(entry.size),
+            entry.content_hash or "",
+            str(entry.mode),
+        ):
+            digest.update(value.encode("utf-8"))
+            digest.update(b"\0")
+    return DirectorySnapshot(str(resolved_root), tuple(entries), digest.hexdigest())
 
 
 def _required_references(root: Path, files: tuple[Path, ...]) -> tuple[str, ...]:

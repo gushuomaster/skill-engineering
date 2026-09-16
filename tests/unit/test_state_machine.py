@@ -206,5 +206,24 @@ def test_authorized_flow_requires_staging_for_publication() -> None:
 def test_allowed_targets_are_guarded_by_context() -> None:
     context = TransitionContext(Intent.AUDIT_ONLY, False, True, False)
     targets = allowed_targets(DISCOVERED, context)
-    assert targets == frozenset({AUDITED, CLASSIFIED})
+    assert targets == frozenset({LifecycleState.INSPECTED, AUDITED, CLASSIFIED})
     assert STAGED not in targets
+
+
+def test_phased_lifecycle_reaches_ready_then_published() -> None:
+    context = TransitionContext(Intent.MODIFY, True, False, True, 0, 0, 0)
+    assert transition(DISCOVERED, LifecycleState.INSPECTED, context) is LifecycleState.INSPECTED
+    assert transition(LifecycleState.INSPECTED, CLASSIFIED, context) is CLASSIFIED
+    assert transition(
+        LifecycleState.READY_TO_PUBLISH, PUBLISHED, context
+    ) is PUBLISHED
+
+
+def test_audit_terminal_state_cannot_transition_to_publish() -> None:
+    context = TransitionContext(Intent.AUDIT_ONLY, False, True, False)
+    with pytest.raises(InvalidTransition):
+        transition(
+            LifecycleState.AUDIT_COMPLETE_BLOCKING_FINDINGS,
+            PUBLISHED,
+            context,
+        )
