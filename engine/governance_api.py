@@ -160,6 +160,10 @@ class GovernanceEngine:
     def enabled(self) -> bool:
         return self.mode is not GovernanceMode.OFF
 
+    @staticmethod
+    def artifact_digest(path: str | Path) -> str:
+        return _digest_path(Path(path))
+
     def evaluate(self, request: GovernanceRequest) -> GovernanceResult:
         if not isinstance(request, GovernanceRequest):
             raise GovernanceError("request must be a GovernanceRequest")
