@@ -100,6 +100,36 @@ def test_deliverable_contract_mismatch_blocks_publication(tmp_path: Path) -> Non
     assert "deliverable_contract_incomplete" in result.reason_codes
 
 
+def test_failed_deliverable_contract_is_blocked_even_with_provider_pass(
+    tmp_path: Path,
+) -> None:
+    request = _request(tmp_path, deliverable_contract={"status": "FAIL"})
+
+    result = GovernanceEngine().evaluate(request)
+
+    assert result.gate_status is GateStatus.BLOCKED
+    assert result.publish_authorized is False
+    assert "deliverable_contract_failed" in result.reason_codes
+
+
+def test_five_document_declaration_with_single_output_is_incomplete(tmp_path: Path) -> None:
+    request = _request(
+        tmp_path,
+        deliverable_contract={
+            "status": "INCOMPLETE",
+            "declared": ["SRS", "SDD_DETAIL", "STP", "STD", "STR"],
+            "verified": ["SRS"],
+        },
+        coverage_status="INCOMPLETE",
+    )
+    result = GovernanceEngine().evaluate(request)
+
+    assert result.coverage_status is CoverageStatus.INCOMPLETE
+    assert result.gate_status is GateStatus.INCOMPLETE
+    assert result.publish_authorized is False
+    assert "deliverable_contract_incomplete" in result.reason_codes
+
+
 def test_shadow_mode_never_authorizes_publish(tmp_path: Path) -> None:
     result = GovernanceEngine(mode=GovernanceMode.SHADOW).evaluate(_request(tmp_path))
 

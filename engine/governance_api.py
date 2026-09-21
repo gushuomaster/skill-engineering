@@ -212,7 +212,7 @@ class GovernanceEngine:
         if any(
             status is GovernanceStatus.FAIL
             for status in (validation, integrity)
-        ) or failed_capabilities:
+        ) or failed_capabilities or "deliverable_contract_failed" in reason_codes:
             gate = GateStatus.BLOCKED
         elif (
             validation is GovernanceStatus.UNKNOWN
