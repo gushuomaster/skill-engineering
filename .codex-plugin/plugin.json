@@ -1,20 +1,20 @@
 {
   "name": "skill-engineering",
-  "version": "1.0.2+codex.20260916071634",
-  "description": "Deterministic engineering support for Codex-authored Skill creation, repair, audit, validation, and release.",
+  "version": "1.0.3+codex.20260921090000",
+  "description": "Codex-led Skill audit, diagnosis, repair, validation, and safe apply.",
   "author": {
     "name": "Local developer"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Skill Engineering",
-    "shortDescription": "Engineer and validate maintainable Skills.",
-    "longDescription": "Helps Codex stage candidates, collect evidence, run deterministic checks, review rule signals, and guard atomic Skill publication.",
+    "shortDescription": "Audit, repair, and validate Skills.",
+    "longDescription": "Helps Codex audit Skills, diagnose defects, validate isolated repairs, and safely apply confirmed changes.",
     "developerName": "Local developer",
     "category": "Productivity",
     "capabilities": [
       "Write"
     ],
-    "defaultPrompt": "Help me engineer this Skill while I retain semantic decisions and use the Plugin for evidence and release safeguards."
+    "defaultPrompt": "Audit or repair this Skill with Codex-led reasoning, evidence-backed validation, and safe apply."
   }
 }
