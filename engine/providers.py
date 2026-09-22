@@ -1,15 +1,20 @@
-"""Invocation-neutral ports and normalization for optional Provider advice."""
+"""Invocation-neutral ports for replaceable Provider implementations and advice."""
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
 from typing import Iterable, Mapping, Protocol, runtime_checkable
 
 from engine.contracts import validate_contract
+from engine.capability_manifest import capability_manifest_from_data
 from engine.models import (
     CheckResult,
     CheckStatus,
+    DeliverableContract,
+    DeliverableEvidence,
+    DeliverableEvidenceStatus,
     LifecycleState,
     ProviderDescriptor,
+    ProviderExecution,
     ProviderResult,
     ProviderStatus,
 )
@@ -18,15 +23,17 @@ CREATE_CANDIDATE = "CREATE_CANDIDATE"
 AUDIT_SKILL = "AUDIT_SKILL"
 GOVERN_AGENT_INSTRUCTIONS = "GOVERN_AGENT_INSTRUCTIONS"
 CHECK_SKILL_CONFORMANCE = "CHECK_SKILL_CONFORMANCE"
+CAPABILITY_CONTRACT = "CAPABILITY_CONTRACT"
 CAPABILITIES = frozenset(
-    {CREATE_CANDIDATE, AUDIT_SKILL, GOVERN_AGENT_INSTRUCTIONS, CHECK_SKILL_CONFORMANCE}
+    {CREATE_CANDIDATE, AUDIT_SKILL, GOVERN_AGENT_INSTRUCTIONS, CHECK_SKILL_CONFORMANCE,
+     CAPABILITY_CONTRACT, "DELIVERABLE_CONTRACT"}
 )
 
 _FAILURE_STATUSES = frozenset(
     {ProviderStatus.UNAVAILABLE, ProviderStatus.INVALID_OUTPUT, ProviderStatus.TIMEOUT, ProviderStatus.INCOMPATIBLE}
 )
 _FORBIDDEN_FIELDS = frozenset(
-    {"final_gate_verdict", "publish_authorization", "replace_original_skill", "pipeline_state_transition"}
+    {"final_gate_verdict", "apply_authorization", "replace_original_skill", "pipeline_state_transition"}
 )
 
 
@@ -46,7 +53,7 @@ def normalize_provider_result(
 ) -> ProviderResult:
     """Validate and normalize adapter output into the provider contract."""
     if isinstance(result, ProviderResult):
-        payload = asdict(result)
+        payload = _jsonable(asdict(result))
     elif isinstance(result, Mapping):
         if _FORBIDDEN_FIELDS.intersection(result):
             raise ValueError("provider output contains forbidden authority fields")
@@ -57,6 +64,13 @@ def normalize_provider_result(
         raise ValueError("provider capability does not match requested capability")
     if provider_id is not None and payload.get("provider_id") != provider_id:
         raise ValueError("provider identity does not match descriptor")
+    provider_available = bool(payload.pop("provider_available", False))
+    provider_execution = ProviderExecution(
+        payload.pop("provider_execution", ProviderExecution.NOT_STARTED)
+    )
+    evidence_valid = bool(payload.pop("evidence_valid", False))
+    contract_payload = payload.pop("deliverable_contract", None)
+    manifest_payload = payload.pop("capability_manifest", None)
     for field in ("findings", "candidate_changes", "evidence", "limitations"):
         if field in payload and isinstance(payload[field], list):
             payload[field] = tuple(payload[field])
@@ -65,12 +79,24 @@ def normalize_provider_result(
         payload["provider_status"] = status.value
     try:
         schema_payload = dict(payload)
+        schema_payload["deliverable_contract"] = contract_payload
+        schema_payload["capability_manifest"] = manifest_payload
         for field in ("findings", "candidate_changes", "evidence", "limitations"):
             if isinstance(schema_payload.get(field), tuple):
                 schema_payload[field] = list(schema_payload[field])
         validate_contract("provider-result", schema_payload)
     except Exception as exc:
         raise ValueError(f"invalid provider result: {exc}") from exc
+    contract = None
+    if contract_payload is not None:
+        if not isinstance(contract_payload, Mapping):
+            raise ValueError("deliverable_contract must be an object")
+        contract = deliverable_contract_from_data(contract_payload)
+    manifest = None
+    if manifest_payload is not None:
+        if not isinstance(manifest_payload, Mapping):
+            raise ValueError("capability_manifest must be an object")
+        manifest = capability_manifest_from_data(manifest_payload)
     return ProviderResult(
         provider_id=str(payload["provider_id"]),
         capability=str(payload["capability"]),
@@ -80,6 +106,38 @@ def normalize_provider_result(
         evidence=tuple(payload["evidence"]),
         limitations=tuple(payload["limitations"]),
         fallback_used=bool(payload["fallback_used"]),
+        provider_available=provider_available,
+        provider_execution=provider_execution,
+        evidence_valid=evidence_valid,
+        deliverable_contract=contract,
+        capability_manifest=manifest,
+    )
+
+
+def deliverable_contract_from_data(payload: Mapping[str, object]) -> DeliverableContract:
+    """Validate and deserialize the Provider-owned deliverable contract."""
+    raw = dict(payload)
+    validate_contract("deliverable-contract", raw)
+    deliverables = tuple(
+        DeliverableEvidence(
+            item["deliverable_id"], item["declared_status"], tuple(item["declarations"]),
+            DeliverableEvidenceStatus(item["exposure_status"]), item["exposure_entrypoint"],
+            item["exposure_selector"], tuple(item["exposure_evidence"]),
+            DeliverableEvidenceStatus(item["implementation_status"]),
+            item["implementation_dispatch_route"], item["implementation_artifact_pattern"],
+            tuple(item["implementation_evidence"]),
+            DeliverableEvidenceStatus(item["behavioral_status"]),
+            tuple(item["behavioral_commands"]), tuple(item["expected_artifacts"]),
+            tuple(item["behavioral_evidence"]),
+        )
+        for item in raw["deliverables"]
+    )
+    return DeliverableContract(
+        raw["schema_version"], raw["inspection_id"], raw["target_digest"],
+        raw["inspection_nonce"], raw["provider_identity"], deliverables,
+        tuple(raw["scope_conflicts"]), raw["applicability_status"],
+        raw["applicability_reason"], tuple(raw["applicability_evidence"]),
+        raw["evidence_origin"],
     )
 
 
@@ -143,29 +201,60 @@ class ProviderGateway:
         descriptor = getattr(adapter, "descriptor", None)
         if not isinstance(descriptor, ProviderDescriptor):
             raise TypeError("adapter must expose a ProviderDescriptor")
-        if descriptor.capability not in CAPABILITIES:
-            raise ValueError(f"unknown provider capability: {descriptor.capability}")
+        if not isinstance(descriptor.capability, str) or not descriptor.capability.strip():
+            raise ValueError("provider capability must be nonblank")
         self._adapters.append(adapter)
 
+    @property
+    def capabilities(self) -> frozenset[str]:
+        return frozenset(
+            (*CAPABILITIES, *(item.descriptor.capability for item in self._adapters),
+             *self._fallbacks.keys())
+        )
+
+    def descriptor_for(
+        self,
+        capability: str,
+        provider_id: str | None = None,
+    ) -> ProviderDescriptor | None:
+        return next(
+            (
+                item.descriptor
+                for item in self._adapters
+                if item.descriptor.capability == capability
+                and (provider_id is None or item.descriptor.provider_id == provider_id)
+                and item.descriptor.availability is not ProviderStatus.UNAVAILABLE
+            ),
+            None,
+        )
+
     def invoke(self, capability: str, request: dict[str, object], formal_run: bool = False) -> ProviderResult:
-        if capability not in CAPABILITIES:
-            raise ValueError(f"unknown provider capability: {capability}")
+        if not isinstance(capability, str) or not capability.strip():
+            raise ValueError("provider capability must be nonblank")
         if not isinstance(request, dict):
             raise TypeError("provider request must be a dict")
         attempted: list[str] = []
+        provider_available = False
+        invocation_started = False
         for adapter in self._adapters:
             descriptor = adapter.descriptor
             if descriptor.capability != capability:
                 continue
             if descriptor.availability is ProviderStatus.UNAVAILABLE:
-                attempted.append(f"{descriptor.provider_id}: unavailable")
+                detail = "; ".join(descriptor.limitations)
+                attempted.append(
+                    f"{descriptor.provider_id}: unavailable"
+                    + (f" ({detail})" if detail else "")
+                )
                 continue
+            provider_available = True
             unpinned = not _is_pinned_descriptor(descriptor)
             degraded = descriptor.availability is ProviderStatus.DEGRADED
             if formal_run and (unpinned or degraded):
                 attempted.append(f"{descriptor.provider_id}: unpinned/degraded")
                 continue
             try:
+                invocation_started = True
                 normalized = normalize_provider_result(
                     adapter.invoke(capability, request),
                     capability=capability,
@@ -183,10 +272,23 @@ class ProviderGateway:
             if formal_run and normalized.provider_status is ProviderStatus.DEGRADED:
                 attempted.append(f"{descriptor.provider_id}: degraded result")
                 continue
-            return normalized
+            successful = normalized.provider_status not in _FAILURE_STATUSES
+            return ProviderResult(
+                normalized.provider_id, normalized.capability,
+                normalized.provider_status, normalized.findings,
+                normalized.candidate_changes, normalized.evidence,
+                normalized.limitations, normalized.fallback_used,
+                True,
+                ProviderExecution.EXECUTED if successful else ProviderExecution.FAILED,
+                True,
+                normalized.deliverable_contract,
+                normalized.capability_manifest,
+            )
         fallback = self._fallbacks.get(capability)
         if fallback is None:
-            limitations = tuple(attempted) + ("no fallback configured; optional capability",)
+            limitations = tuple(attempted) + (
+                "no Provider fallback configured; Required Capability resolution remains external",
+            )
             return ProviderResult(
                 provider_id=f"optional.none.{capability.lower()}",
                 capability=capability,
@@ -196,6 +298,14 @@ class ProviderGateway:
                 evidence=(),
                 limitations=limitations,
                 fallback_used=False,
+                provider_available=provider_available,
+                provider_execution=(
+                    ProviderExecution.FAILED if invocation_started
+                    else ProviderExecution.NOT_STARTED
+                ),
+                evidence_valid=False,
+                deliverable_contract=None,
+                capability_manifest=None,
             )
         try:
             fallback_result = fallback.invoke(capability, request)
@@ -212,26 +322,37 @@ class ProviderGateway:
                 evidence=(),
                 limitations=limitations,
                 fallback_used=False,
+                provider_available=True,
+                provider_execution=ProviderExecution.FAILED,
+                evidence_valid=False,
+                deliverable_contract=None,
+                capability_manifest=None,
             )
-        if attempted or not result.fallback_used:
-            limitations = result.limitations
-            if attempted:
-                limitations = limitations + ("; ".join(attempted),)
-            result = ProviderResult(
-                result.provider_id,
-                result.capability,
-                result.provider_status,
-                result.findings,
-                result.candidate_changes,
-                result.evidence,
-                limitations,
-                True,
-            )
-        return result
+        limitations = result.limitations
+        if attempted:
+            limitations = limitations + ("; ".join(attempted),)
+        return ProviderResult(
+            result.provider_id,
+            result.capability,
+            result.provider_status,
+            result.findings,
+            result.candidate_changes,
+            result.evidence,
+            limitations,
+            True,
+            True,
+            (ProviderExecution.EXECUTED
+             if result.provider_status not in _FAILURE_STATUSES
+             else ProviderExecution.FAILED),
+            True,
+            result.deliverable_contract,
+            result.capability_manifest,
+        )
 
 
 __all__ = [
     "AUDIT_SKILL",
+    "CAPABILITY_CONTRACT",
     "CAPABILITIES",
     "CHECK_SKILL_CONFORMANCE",
     "CREATE_CANDIDATE",
@@ -239,9 +360,22 @@ __all__ = [
     "ProviderAdapter",
     "ProviderGateway",
     "normalize_provider_result",
+    "deliverable_contract_from_data",
     "normalize_findings",
     "provider_result_to_check_result",
 ]
+
+
+def _jsonable(value: object) -> object:
+    if is_dataclass(value):
+        return _jsonable(asdict(value))
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_jsonable(item) for item in value]
+    if hasattr(value, "value"):
+        return value.value
+    return value
 
 
 def _is_pinned_descriptor(descriptor: ProviderDescriptor) -> bool:

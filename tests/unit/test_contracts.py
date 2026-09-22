@@ -21,15 +21,29 @@ def test_defect_audit_decision_requires_root_cause() -> None:
     with pytest.raises(ValidationError): validate_contract("decision-record", load_fixture("decision_audit_defect_missing_root_cause.json"))
 def test_provider_cannot_emit_final_authority_fields() -> None:
     with pytest.raises(ValidationError): validate_contract("provider-result", load_fixture("provider_result_with_verdict.json"))
+
+
+def test_provider_result_schema_is_compatible_with_codex_structured_outputs() -> None:
+    from engine.contracts import load_schema
+
+    assert "allOf" not in load_schema("provider-result")
 @pytest.mark.parametrize("fixture_name", ["gate_publish_with_fail.json", "gate_unchanged_authorized.json"])
 def test_gate_rejects_invalid_publication_authority(fixture_name: str) -> None:
     with pytest.raises(ValidationError): validate_contract("gate-result", load_fixture(fixture_name))
-def test_audit_pass_is_not_publish_authorized() -> None:
+def test_audit_pass_is_not_apply_authorized() -> None:
     payload = load_fixture("gate_audit_pass.json")
     validate_contract("gate-result", payload)
     assert payload["verdict"] == "PASS"
-    assert payload["publish_authorized"] is False
+    assert payload["apply_authorized"] is False
     assert payload["outcome"] == "UNCHANGED_VALIDATED"
+
+
+def test_audit_complete_valid_rejects_non_full_coverage() -> None:
+    payload = load_fixture("gate_audit_pass.json")
+    payload["outcome"] = "AUDIT_COMPLETE_VALID"
+    payload["coverage_status"] = "PARTIAL"
+    with pytest.raises(ValidationError):
+        validate_contract("gate-result", payload)
 
 def test_modify_defect_decision_requires_root_cause() -> None:
     with pytest.raises(ValidationError): validate_contract("decision-record", load_fixture("decision_modify_defect_missing_root_cause.json"))
