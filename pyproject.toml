@@ -16,4 +16,7 @@ testpaths = ["tests"]
 addopts = "-ra"
 
 [tool.setuptools.packages.find]
-include = ["engine*", "validators*"]
+include = ["engine*", "validators*", "schemas*"]
+
+[tool.setuptools.package-data]
+schemas = ["*.json"]
