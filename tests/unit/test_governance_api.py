@@ -61,6 +61,28 @@ def test_public_api_authorizes_only_complete_verified_request(tmp_path: Path) ->
     assert result.engine_revision == "abc123"
 
 
+def test_engine_revision_uses_installed_vcs_commit(monkeypatch) -> None:
+    class InstalledDistribution:
+        version = "1.0.3"
+
+        @staticmethod
+        def read_text(filename: str) -> str | None:
+            if filename != "direct_url.json":
+                return None
+            return (
+                '{"url":"https://github.com/gushuomaster/skill-engineering.git",'
+                '"vcs_info":{"vcs":"git","commit_id":"6de45eb"}}'
+            )
+
+    monkeypatch.delenv("SKILL_ENGINEERING_REVISION", raising=False)
+    monkeypatch.setattr(
+        "engine.governance_api.importlib.metadata.distribution",
+        lambda name: InstalledDistribution(),
+    )
+
+    assert GovernanceEngine().engine_revision == "6de45eb"
+
+
 def test_required_provider_not_executed_is_incomplete(tmp_path: Path) -> None:
     request = _request(
         tmp_path,

@@ -148,8 +148,10 @@ class GovernanceEngine:
     ) -> None:
         self.engine_name = engine_name
         self.engine_version = engine_version or _package_version()
-        self.engine_revision = engine_revision or os.environ.get(
-            "SKILL_ENGINEERING_REVISION", "working-tree"
+        self.engine_revision = (
+            engine_revision
+            or os.environ.get("SKILL_ENGINEERING_REVISION")
+            or _package_revision()
         )
         try:
             self.mode = GovernanceMode(mode)
@@ -421,6 +423,17 @@ def _package_version() -> str:
         return importlib.metadata.version("skill-engineering")
     except importlib.metadata.PackageNotFoundError:
         return "1.0.3"
+
+
+def _package_revision() -> str:
+    try:
+        distribution = importlib.metadata.distribution("skill-engineering")
+        direct_url = distribution.read_text("direct_url.json")
+        metadata = json.loads(direct_url) if direct_url else {}
+        commit_id = metadata.get("vcs_info", {}).get("commit_id")
+        return str(commit_id).strip() if commit_id else "working-tree"
+    except (importlib.metadata.PackageNotFoundError, json.JSONDecodeError, AttributeError):
+        return "working-tree"
 
 
 __all__ = [
