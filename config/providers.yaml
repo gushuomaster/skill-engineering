@@ -1,41 +1,45 @@
 providers:
+  - provider_id: bundled.capability-contract
+    capability: CAPABILITY_CONTRACT
+    source_identity: bundled-provider:capability-contract-provider
+    resource_path: providers/capability-contract-provider
+    revision_or_version: packaged
+    optional: false
+    availability: packaged
+    compatibility:
+      status: bundled
+    invocation_adapter: codex-exec
+    fallback_provider: null
+    fallback_equivalence: NONE
+    required_capabilities:
+      - semantic_capability_inventory
+      - evidence_bound_capability_diff
+  - provider_id: bundled.deliverable-contract
+    capability: DELIVERABLE_CONTRACT
+    source_identity: bundled-provider:capability-contract-provider
+    resource_path: providers/capability-contract-provider
+    revision_or_version: packaged
+    optional: false
+    availability: packaged
+    compatibility:
+      status: bundled
+    invocation_adapter: codex-exec
+    fallback_provider: null
+    fallback_equivalence: NONE
+    required_capabilities:
+      - deliverable_contract_inventory
+      - evidence_bound_output_coverage
   - provider_id: openai.skill-creator
     capability: CREATE_CANDIDATE
     source_identity: OpenAI/skill-creator
     revision_or_version: null
     optional: true
-    availability: false
+    availability: discover-at-runtime
     compatibility:
       status: unverified
-    invocation_adapter: unavailable
-    fallback_provider: null
-  - provider_id: mblode.agent-skills-creator
-    capability: AUDIT_SKILL
-    source_identity: mblode/agent-skills
-    revision_or_version: null
-    optional: true
-    availability: false
-    compatibility:
-      status: unverified
-    invocation_adapter: unavailable
-    fallback_provider: null
-  - provider_id: mblode.agents-md
-    capability: GOVERN_AGENT_INSTRUCTIONS
-    source_identity: mblode/agent-skills
-    revision_or_version: null
-    optional: true
-    availability: false
-    compatibility:
-      status: unverified
-    invocation_adapter: unavailable
-    fallback_provider: null
-  - provider_id: validate-skills
-    capability: CHECK_SKILL_CONFORMANCE
-    source_identity: validate-skills/validate-skills
-    revision_or_version: null
-    optional: true
-    availability: false
-    compatibility:
-      status: unverified
-    invocation_adapter: unavailable
-    fallback_provider: null
+    invocation_adapter: codex-exec
+    fallback_provider: internal.restructuring-rubric
+    fallback_equivalence: FULL
+    required_capabilities:
+      - skill_creation_or_restructure
+      - skill_trigger_and_description

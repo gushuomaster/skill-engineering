@@ -7,6 +7,7 @@ from engine.inventory import build_artifact_manifest
 from engine.models import (
     CheckResult,
     CheckStatus,
+    CoverageStatus,
     ControlGap,
     DecisionRecord,
     GateOutcome,
@@ -16,6 +17,7 @@ from engine.models import (
     LifecycleState,
     PrimaryIssueClass,
     RegressionDisposition,
+    CapabilityPreservationStatus,
 )
 from engine.quality_gate import GateContext, adjudicate
 from validators.skill_structure import validate_skill_structure
@@ -62,11 +64,11 @@ def _context(**overrides: object) -> GateContext:
         "intent": Intent.CREATE,
         "state": LifecycleState.VALIDATED,
         "authorized_to_modify": True,
-        "candidate_requires_publish": True,
-        "workspace_publishable": True,
+        "candidate_requires_apply": True,
+        "workspace_applicable": True,
         "decision": None,
         "semantic_confirmed": True,
-        "publish_requested": True,
+        "apply_requested": True,
     }
     values.update(overrides)
     return GateContext(**values)
@@ -98,7 +100,7 @@ def test_each_core_policy_failure_is_executable_and_blocks(policy_id: str) -> No
 
     assert result.verdict is GateVerdict.FAIL
     assert any(finding.startswith(policy_id) for finding in result.blocking_findings)
-    assert result.publish_authorized is False
+    assert result.apply_authorized is False
 
 
 @pytest.mark.parametrize(
@@ -127,7 +129,7 @@ def test_b08_blocks_missing_erroring_or_untrustworthy_required_evidence(
 
     result = adjudicate(_context(), evidence)
 
-    assert result.verdict is GateVerdict.FAIL
+    assert result.verdict is GateVerdict.INCOMPLETE
     assert any(finding.startswith("B08") for finding in result.blocking_findings)
 
 
@@ -161,6 +163,63 @@ def test_optional_provider_or_checker_error_is_warning_only(source: str) -> None
     assert result.verdict is GateVerdict.PASS
     assert result.blocking_findings == ()
     assert any("optional.semantic-review" in warning for warning in result.warnings)
+
+
+def test_required_partial_coverage_blocks_apply_even_when_checks_pass() -> None:
+    result = adjudicate(
+        _context(
+            coverage_status=CoverageStatus.PARTIAL,
+            full_coverage_required=True,
+        ),
+        _passing_evidence(),
+    )
+
+    assert result.verdict is GateVerdict.INCOMPLETE
+    assert result.coverage_status is CoverageStatus.PARTIAL
+    assert result.apply_authorized is False
+
+
+def test_optional_partial_coverage_preserves_existing_apply_policy() -> None:
+    result = adjudicate(
+        _context(
+            coverage_status=CoverageStatus.PARTIAL,
+            full_coverage_required=False,
+        ),
+        _passing_evidence(),
+    )
+
+    assert result.verdict is GateVerdict.PASS
+    assert result.coverage_status is CoverageStatus.PARTIAL
+    assert result.apply_authorized is True
+
+
+def test_unapproved_removed_capability_blocks_apply() -> None:
+    result = adjudicate(
+        _context(
+            coverage_status=CoverageStatus.FULL,
+            capability_preservation=CapabilityPreservationStatus.AUTHORIZATION_REQUIRED,
+        ),
+        _passing_evidence(),
+    )
+
+    assert result.verdict is GateVerdict.FAIL
+    assert result.apply_authorized is False
+    assert any(
+        "capability regression requires authorization" in item
+        for item in result.blocking_findings
+    )
+
+
+def test_broken_capability_blocks_even_when_authorized() -> None:
+    result = adjudicate(
+        _context(
+            capability_preservation=CapabilityPreservationStatus.CAPABILITY_REGRESSION,
+        ),
+        _passing_evidence(),
+    )
+
+    assert result.verdict is GateVerdict.FAIL
+    assert result.apply_authorized is False
 
 
 def test_malformed_optional_provider_result_is_warning_only() -> None:
@@ -342,7 +401,7 @@ def test_task_6_structure_evidence_can_pass_the_gate() -> None:
     evidence = validate_skill_structure(manifest)
 
     result = adjudicate(
-        _context(intent=Intent.AUDIT_ONLY, candidate_requires_publish=False),
+        _context(intent=Intent.AUDIT_ONLY, candidate_requires_apply=False),
         evidence,
     )
 
@@ -405,42 +464,42 @@ def test_adjudicate_is_the_gate_result_authority() -> None:
     assert not any(isinstance(item, GateResult) for item in evidence)
 
 
-def test_audit_only_pass_is_unchanged_and_never_publish_authorized() -> None:
+def test_audit_only_pass_is_unchanged_and_never_apply_authorized() -> None:
     result = adjudicate(
-        _context(intent=Intent.AUDIT_ONLY, candidate_requires_publish=False),
+        _context(intent=Intent.AUDIT_ONLY, candidate_requires_apply=False),
         _passing_evidence(),
     )
 
     assert result.verdict is GateVerdict.PASS
     assert result.outcome is GateOutcome.UNCHANGED_VALIDATED
-    assert result.publish_authorized is False
+    assert result.apply_authorized is False
 
 
 def test_audit_only_pass_ignores_inconsistent_candidate_publish_flag() -> None:
     result = adjudicate(
-        _context(intent=Intent.AUDIT_ONLY, candidate_requires_publish=True),
+        _context(intent=Intent.AUDIT_ONLY, candidate_requires_apply=True),
         _passing_evidence(),
     )
 
     assert result.verdict is GateVerdict.PASS
     assert result.outcome is GateOutcome.UNCHANGED_VALIDATED
-    assert result.publish_authorized is False
+    assert result.apply_authorized is False
 
 
 def test_publishable_authorized_candidate_pass_is_ready_to_publish() -> None:
     result = adjudicate(_context(), _passing_evidence())
 
     assert result.verdict is GateVerdict.PASS
-    assert result.outcome is GateOutcome.READY_TO_PUBLISH
-    assert result.publish_authorized is True
+    assert result.outcome is GateOutcome.READY_TO_APPLY
+    assert result.apply_authorized is True
 
 
 def test_candidate_without_explicit_publish_request_is_validated_but_not_authorized() -> None:
-    result = adjudicate(_context(publish_requested=False), _passing_evidence())
+    result = adjudicate(_context(apply_requested=False), _passing_evidence())
 
     assert result.verdict is GateVerdict.PASS
     assert result.outcome is GateOutcome.VALIDATED
-    assert result.publish_authorized is False
+    assert result.apply_authorized is False
 
 
 def test_unmapped_required_failure_blocks_as_b04() -> None:
@@ -460,21 +519,51 @@ def test_unmapped_required_failure_blocks_as_b04() -> None:
 def test_passing_checks_without_codex_semantic_confirmation_cannot_pass() -> None:
     result = adjudicate(_context(semantic_confirmed=False), _passing_evidence())
 
-    assert result.verdict is GateVerdict.FAIL
+    assert result.verdict is GateVerdict.INCOMPLETE
     assert result.semantic_confirmed is False
-    assert result.publish_authorized is False
+    assert result.apply_authorized is False
     assert any(finding.startswith("B12") for finding in result.blocking_findings)
+
+
+def test_required_capability_not_executed_is_incomplete() -> None:
+    capability = _check(
+        "capability.domain_x.preflight",
+        source="internal.capability-preflight",
+        status=CheckStatus.NOT_EXECUTED,
+        evidence=("preflight_status=BLOCKED",),
+    )
+
+    result = adjudicate(_context(), _passing_evidence() + (capability,))
+
+    assert result.verdict is GateVerdict.INCOMPLETE
+    assert result.outcome is GateOutcome.INCOMPLETE
+    assert result.apply_authorized is False
+
+
+def test_framework_execution_error_is_distinct_from_target_failure() -> None:
+    framework = _check(
+        "framework.execution",
+        source="engine.framework.runtime",
+        status=CheckStatus.ERROR,
+        evidence=("validator crashed",),
+    )
+
+    result = adjudicate(_context(), _passing_evidence() + (framework,))
+
+    assert result.verdict is GateVerdict.ERROR
+    assert result.outcome is GateOutcome.ERROR
+    assert result.apply_authorized is False
 
 
 def test_pass_without_publishable_workspace_does_not_authorize_publication() -> None:
     result = adjudicate(
-        _context(workspace_publishable=False),
+        _context(workspace_applicable=False),
         _passing_evidence(),
     )
 
     assert result.verdict is GateVerdict.PASS
     assert result.outcome is GateOutcome.REMEDIATION_REQUIRED
-    assert result.publish_authorized is False
+    assert result.apply_authorized is False
 
 
 def test_unauthorized_candidate_is_blocked_by_b09() -> None:
@@ -486,7 +575,7 @@ def test_unauthorized_candidate_is_blocked_by_b09() -> None:
     assert result.verdict is GateVerdict.FAIL
     assert result.outcome is GateOutcome.REMEDIATION_REQUIRED
     assert any(finding.startswith("B09") for finding in result.blocking_findings)
-    assert result.publish_authorized is False
+    assert result.apply_authorized is False
 
 
 def test_audit_only_failure_is_unchanged_blocked() -> None:
@@ -499,10 +588,10 @@ def test_audit_only_failure_is_unchanged_blocked() -> None:
     )
 
     result = adjudicate(
-        _context(intent=Intent.AUDIT_ONLY, candidate_requires_publish=False),
+        _context(intent=Intent.AUDIT_ONLY, candidate_requires_apply=False),
         evidence,
     )
 
     assert result.verdict is GateVerdict.FAIL
     assert result.outcome is GateOutcome.UNCHANGED_BLOCKED
-    assert result.publish_authorized is False
+    assert result.apply_authorized is False

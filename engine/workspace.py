@@ -1,4 +1,4 @@
-"""Safe isolated staging for Skill operations, without publication."""
+"""Safe isolated staging and atomic application for Skill repairs."""
 from __future__ import annotations
 
 import os
@@ -9,12 +9,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from engine.inventory import assert_no_scope_escape, digest_tree, build_artifact_manifest, snapshot_tree
-from engine.models import DirectorySnapshot
+from engine.models import CapabilityChange, CapabilityDiff, CapabilityChangeKind, DirectorySnapshot
 from engine.models import Intent
 from engine.models import GateResult, GateOutcome, GateVerdict
 
 
-class PublishNotAuthorized(RuntimeError):
+class ApplyNotAuthorized(RuntimeError):
     pass
 
 
@@ -26,26 +26,34 @@ class CandidateChangedError(RuntimeError):
     finding_id = "B12"
 
 
-class CrossFilesystemPublishError(RuntimeError):
+class CrossFilesystemApplyError(RuntimeError):
     pass
 
 
-class PublishRecoveryError(RuntimeError):
-    def __init__(self, message: str, result: "PublishResult") -> None:
+class ApplyRecoveryError(RuntimeError):
+    def __init__(self, message: str, result: "ApplyResult") -> None:
         super().__init__(message)
         self.result = result
 
 
 @dataclass(frozen=True)
-class PublishResult:
-    published_path: Path
+class ApplyResult:
+    applied_path: Path
     backup_path: Path | None
     restored_after_failure: bool
     source_digest_before: str | None
     candidate_digest: str
-    published_digest: str | None
+    applied_digest: str | None
     workspace_diff: WorkspaceDiff
     status: str
+
+    @property
+    def published_path(self) -> Path:
+        return self.applied_path
+
+    @property
+    def published_digest(self) -> str | None:
+        return self.applied_digest
 
 
 @dataclass(frozen=True)
@@ -53,6 +61,49 @@ class WorkspaceDiff:
     added: tuple[str, ...]
     modified: tuple[str, ...]
     deleted: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SemanticWorkspaceDiff:
+    file_changes: WorkspaceDiff
+    declaration_changes: tuple[str, ...]
+    entrypoint_changes: tuple[str, ...]
+    schema_changes: tuple[str, ...]
+    template_changes: tuple[str, ...]
+    test_coverage_changes: tuple[str, ...]
+    capability_changes: tuple[CapabilityChange, ...]
+
+
+def build_semantic_workspace_diff(
+    file_changes: WorkspaceDiff,
+    capability_diff: CapabilityDiff | None,
+) -> SemanticWorkspaceDiff:
+    changes = capability_diff.changes if capability_diff is not None else ()
+
+    def categorized(*fields: str) -> tuple[str, ...]:
+        return tuple(
+            f"{item.capability_id}:{item.kind.value}"
+            for item in changes
+            if any(field in item.changed_fields for field in fields)
+        )
+
+    declaration_changes = tuple(
+        f"{item.capability_id}:{item.kind.value}"
+        for item in changes
+        if item.kind in {CapabilityChangeKind.REMOVED, CapabilityChangeKind.NARROWED}
+        or "declared_status" in item.changed_fields
+        or "public_name" in item.changed_fields
+        or "capability_type" in item.changed_fields
+    )
+    return SemanticWorkspaceDiff(
+        file_changes,
+        declaration_changes,
+        categorized("entrypoints"),
+        categorized("schemas"),
+        categorized("templates"),
+        categorized("validation_coverage"),
+        changes,
+    )
 
 
 def _same_filesystem(first: Path, second: Path) -> bool:
@@ -213,7 +264,7 @@ class WorkspaceSession:
         return diff_snapshots(self.source_snapshot, snapshot_tree(self.source))
 
     def bind_confirmed_artifact(self, artifact: Path, artifact_digest: str) -> None:
-        """Bind publication to the exact staged artifact confirmed by Codex."""
+        """Bind safe apply to the exact staged artifact confirmed by Codex."""
         if self.staging is None:
             raise ValueError("a staged candidate is required for semantic binding")
         artifact = artifact.resolve(strict=True)
@@ -280,77 +331,77 @@ def diff_snapshots(before: DirectorySnapshot, after: DirectorySnapshot) -> Works
     )
 
 
-def publish_atomic(session: WorkspaceSession, gate: GateResult) -> PublishResult:
-    if not (gate.verdict is GateVerdict.PASS and gate.outcome is GateOutcome.READY_TO_PUBLISH and gate.publish_authorized):
-        raise PublishNotAuthorized("gate is not authorized for publication")
+def apply_atomic(session: WorkspaceSession, gate: GateResult) -> ApplyResult:
+    if not (gate.verdict is GateVerdict.PASS and gate.outcome is GateOutcome.READY_TO_APPLY and gate.apply_authorized):
+        raise ApplyNotAuthorized("gate is not authorized for safe apply")
     if session.staging is None or not session.staging.is_dir():
-        raise PublishNotAuthorized("staged candidate is required")
+        raise ApplyNotAuthorized("staged candidate is required")
     staging = session.staging.resolve()
     target = next((p for p in staging.iterdir() if p.is_dir()), staging)
     candidate_digest = digest_tree(target)
     if session.confirmed_artifact_digest is None:
-        raise PublishNotAuthorized("staged candidate is not bound to a semantic confirmation")
+        raise ApplyNotAuthorized("staged candidate is not bound to a semantic confirmation")
     if candidate_digest != session.confirmed_artifact_digest:
         raise CandidateChangedError("candidate digest changed after semantic confirmation")
-    published = staging.parent / (session.source.name if session.source is not None else target.name)
-    if not _same_filesystem(staging, published.parent):
-        raise CrossFilesystemPublishError("staging and target must share a filesystem")
+    applied = staging.parent / (session.source.name if session.source is not None else target.name)
+    if not _same_filesystem(staging, applied.parent):
+        raise CrossFilesystemApplyError("staging and target must share a filesystem")
     if session.source is not None and not session.verify_source_unchanged():
         raise SourceChangedError("source changed after staging")
     workspace_diff = session.diff(target)
-    backup = published.parent / (published.name + ".backup") if published.exists() else None
+    backup = applied.parent / (applied.name + ".backup") if applied.exists() else None
     moved_backup = False
     try:
-        if published.exists():
+        if applied.exists():
             if backup and backup.exists():
-                _remove_exact(backup, published.parent)
-            os.replace(str(published), str(backup))
+                _remove_exact(backup, applied.parent)
+            os.replace(str(applied), str(backup))
             moved_backup = True
-        os.replace(str(target), str(published))
-        if not (published / "SKILL.md").is_file():
-            raise ValueError("published candidate is not loadable")
-        manifest = build_artifact_manifest(published, session.intent, session.source_digest)
+        os.replace(str(target), str(applied))
+        if not (applied / "SKILL.md").is_file():
+            raise ValueError("applied candidate is not loadable")
+        manifest = build_artifact_manifest(applied, session.intent, session.source_digest)
         if manifest.content_digest != candidate_digest:
-            raise ValueError("published candidate digest mismatch")
-        return PublishResult(
-            published,
+            raise ValueError("applied candidate digest mismatch")
+        return ApplyResult(
+            applied,
             backup if moved_backup else None,
             False,
             session.source_digest,
             candidate_digest,
             manifest.content_digest,
             workspace_diff,
-            "PUBLISHED",
+            "APPLIED",
         )
     except Exception as exc:
         try:
-            if published.exists() and published != backup:
-                _remove_exact(published, published.parent)
+            if applied.exists() and applied != backup:
+                _remove_exact(applied, applied.parent)
             if moved_backup and backup and backup.exists():
-                os.replace(str(backup), str(published))
+                os.replace(str(backup), str(applied))
         except Exception as restore_exc:
-            result = PublishResult(
-                published,
+            result = ApplyResult(
+                applied,
                 backup if moved_backup else None,
                 False,
                 session.source_digest,
                 candidate_digest,
-                _digest_if_loadable(published),
+                _digest_if_loadable(applied),
                 workspace_diff,
-                "PUBLISH_FAILED_UNRECOVERABLE",
+                "APPLY_FAILED_UNRECOVERABLE",
             )
-            raise PublishRecoveryError("publication and recovery failed", result) from restore_exc
-        result = PublishResult(
-            published,
+            raise ApplyRecoveryError("safe apply and recovery failed", result) from restore_exc
+        result = ApplyResult(
+            applied,
             backup if moved_backup else None,
             True,
             session.source_digest,
             candidate_digest,
-            _digest_if_loadable(published),
+            _digest_if_loadable(applied),
             workspace_diff,
-            "PUBLISH_FAILED_RECOVERED",
+            "APPLY_FAILED_RECOVERED",
         )
-        raise PublishRecoveryError("publication failed; original restored", result) from exc
+        raise ApplyRecoveryError("safe apply failed; original restored", result) from exc
 
 
 def _digest_if_loadable(path: Path) -> str | None:
@@ -370,3 +421,11 @@ def _remove_exact(path: Path, parent: Path) -> None:
         path.rmdir()
     elif path.exists():
         path.unlink()
+
+
+# Import compatibility only; product and serialized semantics use safe apply.
+PublishNotAuthorized = ApplyNotAuthorized
+CrossFilesystemPublishError = CrossFilesystemApplyError
+PublishRecoveryError = ApplyRecoveryError
+PublishResult = ApplyResult
+publish_atomic = apply_atomic

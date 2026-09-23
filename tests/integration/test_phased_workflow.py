@@ -8,7 +8,7 @@ import pytest
 from engine.inventory import digest_tree
 from engine.mechanism_selection import MERGE_INVARIANT
 from engine.models import CheckStatus, GateOutcome, GateVerdict, Intent, LifecycleState
-from engine.orchestrator import PipelineOrchestrator, publish
+from engine.orchestrator import PipelineOrchestrator, apply
 from tests.support import codex_decision, confirmation, copy_candidate
 
 
@@ -25,13 +25,8 @@ def test_inspect_precedes_codex_decisions_and_binds_source_digest(tmp_path: Path
     assert inspection.baseline_digest == digest_tree(source)
     assert inspection.finding_ids == tuple(finding.finding_id for finding in inspection.findings)
     assert inspection.signals
-    assert inspection.provider_capabilities == (
-        "AUDIT_SKILL",
-        "CHECK_SKILL_CONFORMANCE",
-        "CREATE_CANDIDATE",
-        "GOVERN_AGENT_INSTRUCTIONS",
-    )
-    assert all(item.invocation_phase == "INSPECT" for item in inspection.provider_evidence)
+    assert inspection.provider_capabilities == ()
+    assert inspection.provider_evidence == ()
 
 
 def test_validate_rejects_stale_inspection(tmp_path: Path) -> None:
@@ -99,7 +94,7 @@ def test_validate_is_pending_until_post_validation_confirmation(tmp_path: Path) 
         candidate=candidate,
         target_parent=destination,
         authorized_to_modify=True,
-        publish_requested=True,
+        apply_requested=True,
     )
 
     assert validation.lifecycle_state is LifecycleState.VALIDATED_PENDING_CONFIRMATION
@@ -111,13 +106,13 @@ def test_validate_is_pending_until_post_validation_confirmation(tmp_path: Path) 
 
     outcome = orchestrator.confirm(validation, confirmation(validation.artifact_path))
     assert outcome.gate_result.verdict is GateVerdict.PASS
-    assert outcome.gate_result.outcome is GateOutcome.READY_TO_PUBLISH
-    assert outcome.lifecycle_state is LifecycleState.READY_TO_PUBLISH
+    assert outcome.gate_result.outcome is GateOutcome.READY_TO_APPLY
+    assert outcome.lifecycle_state is LifecycleState.READY_TO_APPLY
     assert not (destination / source.name).exists()
 
-    result = publish(outcome)
-    assert result.status == "PUBLISHED"
-    assert (destination / source.name).exists()
+    with pytest.raises(ValueError, match="formal completion receipt"):
+        apply(outcome)
+    assert not (destination / source.name).exists()
 
 
 def test_confirm_rejects_candidate_changed_after_validation(tmp_path: Path) -> None:

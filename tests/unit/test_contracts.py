@@ -23,6 +23,29 @@ def test_provider_cannot_emit_final_authority_fields() -> None:
     with pytest.raises(ValidationError): validate_contract("provider-result", load_fixture("provider_result_with_verdict.json"))
 
 
+def test_provider_result_rejects_malformed_deliverable_contract_digest() -> None:
+    payload = load_fixture("provider_result.json")
+    contract = {
+        "schema_version": "1.0",
+        "inspection_id": "inspection-1",
+        "target_digest": "a" * 63,
+        "inspection_nonce": "nonce-1",
+        "provider_identity": "provider-a",
+        "deliverables": [],
+        "scope_conflicts": [],
+        "applicability_status": "applicable",
+        "applicability_reason": "The target declares public deliverables.",
+        "applicability_evidence": [],
+        "evidence_origin": "provider",
+    }
+    payload["deliverable_contract"] = contract
+
+    with pytest.raises(ValidationError):
+        validate_contract("provider-result", payload)
+    with pytest.raises(ValidationError):
+        validate_contract("deliverable-contract", contract)
+
+
 def test_provider_result_schema_is_compatible_with_codex_structured_outputs() -> None:
     from engine.contracts import load_schema
 

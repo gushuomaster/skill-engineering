@@ -4,12 +4,12 @@
   "required": [
     "inspection_id", "mode", "source_path", "baseline_manifest",
     "baseline_snapshot", "baseline_digest", "signals", "findings",
-    "finding_ids", "provider_capabilities", "provider_evidence", "created_at",
+    "finding_ids", "provider_capabilities", "provider_evidence", "capability_preflight", "standard_dependencies", "created_at",
     "tool_schema_version", "lifecycle_state"
   ],
   "properties": {
     "inspection_id": {"type": "string", "minLength": 1},
-    "mode": {"enum": ["CREATE", "MODIFY", "FIX", "AUDIT_ONLY", "AUDIT_OPTIMIZE"]},
+    "mode": {"enum": ["CREATE", "AUDIT", "AUDIT_REPAIR", "TARGETED_REPAIR"]},
     "source_path": {"type": ["string", "null"]},
     "baseline_manifest": {"type": ["object", "null"]},
     "baseline_snapshot": {"type": ["object", "null"]},
@@ -18,10 +18,101 @@
     "findings": {"type": "array"},
     "finding_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "provider_capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
-    "provider_evidence": {"type": "array"},
+    "provider_evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["provider_id", "capability", "invocation_phase", "status", "summary", "deterministic", "reproducible", "findings", "evidence", "limitations", "provider_available", "provider_execution", "fallback_used", "evidence_valid"],
+        "properties": {
+          "provider_id": {"type": "string", "minLength": 1},
+          "capability": {"type": "string", "minLength": 1},
+          "invocation_phase": {"type": "string", "minLength": 1},
+          "status": {"enum": ["PASS", "WARN", "FAIL", "SKIP", "ERROR", "NOT_EXECUTED"]},
+          "summary": {"type": "string", "minLength": 1},
+          "deterministic": {"type": "boolean"},
+          "reproducible": {"type": "boolean"},
+          "findings": {"type": "array", "items": {"type": "string"}},
+          "evidence": {"type": "array", "items": {"type": "string"}},
+          "limitations": {"type": "array", "items": {"type": "string"}},
+          "provider_available": {"type": "boolean"},
+          "provider_execution": {"enum": ["NOT_STARTED", "EXECUTED", "FAILED"]},
+          "fallback_used": {"type": "boolean"},
+          "evidence_valid": {"type": "boolean"}
+          ,"deliverable_contract": {"anyOf": [{"$ref": "deliverable-contract.schema.json"}, {"type": "null"}]}
+          ,"capability_manifest": {"anyOf": [{"$ref": "capability-manifest.schema.json"}, {"type": "null"}]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "capability_preflight": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["capability", "required", "status", "preferred_providers", "selected_provider", "fallback", "fallback_equivalence", "evidence"],
+        "properties": {
+          "capability": {"type": "string", "minLength": 1},
+          "required": {"type": "boolean"},
+          "status": {"enum": ["READY", "FALLBACK", "NOT_APPLICABLE", "BLOCKED"]},
+          "preferred_providers": {"type": "array", "items": {"type": "string"}},
+          "selected_provider": {"type": ["string", "null"]},
+          "fallback": {"type": ["string", "null"]},
+          "fallback_equivalence": {"enum": ["FULL", "ALTERNATIVE", "PARTIAL", "NONE"]},
+          "evidence": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
+      }
+    },
+    "standard_dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["skill_name", "responsibility", "coverage_gap", "status", "installed_path"],
+        "properties": {
+          "skill_name": {"type": "string", "minLength": 1},
+          "responsibility": {"type": "string", "minLength": 1},
+          "coverage_gap": {"type": "string", "minLength": 1},
+          "status": {"enum": ["AVAILABLE", "MISSING", "DECLINED"]},
+          "installed_path": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      }
+    },
     "created_at": {"type": "string", "minLength": 1},
-    "tool_schema_version": {"const": "2.0"},
+    "tool_schema_version": {"const": "4.2"},
     "lifecycle_state": {"const": "INSPECTED"}
+    ,"inspection_nonce": {"type": "string", "minLength": 1}
+    ,"provenance": {"type": "array", "items": {"type": "string"}}
+    ,"deliverable_contract_applicability": {"enum": ["NOT_REQUIRED", "OPTIONAL", "REQUIRED", "COMPATIBILITY"]}
+    ,"deliverable_contract_provenance": {"$ref": "#/$defs/deliverableContractProvenance"}
+    ,"baseline_capability_manifest": {"anyOf": [{"$ref": "capability-manifest.schema.json"}, {"type": "null"}]}
+    ,"baseline_capability_digest": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}
+    ,"capability_provider_id": {"type": ["string", "null"]}
+    ,"capability_provider_revision": {"type": ["string", "null"]}
+    ,"audit_dimensions": {"type": "array", "items": {"enum": ["FULL", "STRUCTURE", "CAPABILITIES", "DELIVERABLES", "ENTRYPOINTS", "TEMPLATES", "PROFILES", "OUTPUT_COVERAGE"]}}
+    ,"deliverable_not_required_rationale": {"type": ["string", "null"]}
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "deliverableContractProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "applicability", "provider_discovered", "provider_selected",
+        "provider_executed", "contract_present", "contract_validated",
+        "coverage_status", "reason", "provider_id", "provider_execution"
+      ],
+      "properties": {
+        "applicability": {"enum": ["NOT_REQUIRED", "OPTIONAL", "REQUIRED", "COMPATIBILITY"]},
+        "provider_discovered": {"type": "boolean"},
+        "provider_selected": {"type": "boolean"},
+        "provider_executed": {"type": "boolean"},
+        "contract_present": {"type": "boolean"},
+        "contract_validated": {"type": "boolean"},
+        "coverage_status": {"enum": ["FULL", "PARTIAL", "COMPATIBILITY"]},
+        "reason": {"type": "string", "minLength": 1},
+        "provider_id": {"type": ["string", "null"]},
+        "provider_execution": {"enum": ["NOT_STARTED", "EXECUTED", "FAILED"]}
+      }
+    }
+  }
 }

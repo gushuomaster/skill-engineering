@@ -12,7 +12,7 @@ MECHANISM_SELECTED = LifecycleState.MECHANISM_SELECTED
 VALIDATED = LifecycleState.VALIDATED
 GATE_FAILED = LifecycleState.GATE_FAILED
 GATE_PASSED = LifecycleState.GATE_PASSED
-PUBLISHED = LifecycleState.PUBLISHED
+APPLIED = LifecycleState.APPLIED
 UNCHANGED_VALIDATED = LifecycleState.UNCHANGED_VALIDATED
 UNCHANGED_BLOCKED = LifecycleState.UNCHANGED_BLOCKED
 
@@ -74,7 +74,7 @@ def test_gate_failure_can_return_to_responsible_stage(target: LifecycleState) ->
 def test_remediated_candidate_must_reaudit_before_publish() -> None:
     context = TransitionContext(Intent.FIX, True, True, True)
     with pytest.raises(InvalidTransition):
-        transition(STAGED, PUBLISHED, context)
+        transition(STAGED, APPLIED, context)
 
 
 def test_stale_audit_cycle_cannot_reenter_gate() -> None:
@@ -94,7 +94,7 @@ def test_stale_audit_cycle_cannot_reenter_gate() -> None:
 def test_fresh_cycles_allow_gate_and_publication() -> None:
     context = TransitionContext(Intent.FIX, True, True, True, 2, 2, 2, 1)
     assert transition(VALIDATED, GATE_PASSED, context) is GATE_PASSED
-    assert transition(GATE_PASSED, PUBLISHED, context) is PUBLISHED
+    assert transition(GATE_PASSED, APPLIED, context) is APPLIED
 
 
 def test_gate_failed_can_block_unchanged_audit() -> None:
@@ -215,8 +215,8 @@ def test_phased_lifecycle_reaches_ready_then_published() -> None:
     assert transition(DISCOVERED, LifecycleState.INSPECTED, context) is LifecycleState.INSPECTED
     assert transition(LifecycleState.INSPECTED, CLASSIFIED, context) is CLASSIFIED
     assert transition(
-        LifecycleState.READY_TO_PUBLISH, PUBLISHED, context
-    ) is PUBLISHED
+        LifecycleState.READY_TO_APPLY, APPLIED, context
+    ) is APPLIED
 
 
 def test_audit_terminal_state_cannot_transition_to_publish() -> None:
@@ -224,6 +224,6 @@ def test_audit_terminal_state_cannot_transition_to_publish() -> None:
     with pytest.raises(InvalidTransition):
         transition(
             LifecycleState.AUDIT_COMPLETE_BLOCKING_FINDINGS,
-            PUBLISHED,
+            APPLIED,
             context,
         )

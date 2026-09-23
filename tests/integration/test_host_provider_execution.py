@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 import re
 import subprocess
 import textwrap
+import time
 
 import pytest
 
 from engine.capabilities import SKILL_CREATION_OR_RESTRUCTURE
-from engine.host_adapters import build_codex_skill_adapter
+from engine.host_adapters import _build_text_snapshot, build_codex_skill_adapter
 from engine.models import (
     CapabilityStatus, FallbackEquivalence, GateVerdict, Intent, ProviderExecution,
     ProviderStatus,
@@ -286,3 +288,174 @@ def test_structured_output_completion_does_not_wait_for_child_cleanup(
 
     assert adapter.last_timing is not None
     assert adapter.last_timing.structured_output_completed is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Object regression")
+def test_provider_child_exits_when_host_process_is_killed(tmp_path: Path) -> None:
+    child_pid_file = tmp_path / "child.pid"
+    child_script = tmp_path / "slow-child.py"
+    child_script.write_text(
+        textwrap.dedent(
+            """
+            import os
+            import sys
+            import time
+
+            with open(sys.argv[1], "w", encoding="utf-8") as marker:
+                marker.write(str(os.getpid()))
+            time.sleep(60)
+            """
+        ),
+        encoding="utf-8",
+    )
+    helper_script = tmp_path / "provider-host.py"
+    helper_script.write_text(
+        textwrap.dedent(
+            f"""
+            import sys
+            import time
+            from pathlib import Path
+
+            from engine.host_adapters import CodexSkillProviderAdapter, ProviderExecutionTiming
+
+            adapter = CodexSkillProviderAdapter.__new__(CodexSkillProviderAdapter)
+            adapter.timeout_seconds = 60
+            adapter._run_subprocess(
+                [sys.executable, {str(child_script)!r}, {str(child_pid_file)!r}],
+                "",
+                ProviderExecutionTiming(requested_at=time.perf_counter()),
+                Path({str(tmp_path / 'unused-output.json')!r}),
+            )
+            """
+        ),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        (str(ROOT), env.get("PYTHONPATH", ""))
+    ).rstrip(os.pathsep)
+    helper = subprocess.Popen([sys.executable, str(helper_script)], env=env)
+    child_pid: int | None = None
+    child_handle = None
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not child_pid_file.is_file():
+            if helper.poll() is not None:
+                raise AssertionError(f"provider host exited early: {helper.returncode}")
+            time.sleep(0.05)
+        assert child_pid_file.is_file(), "provider child did not start"
+        child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        child_handle = kernel32.OpenProcess(0x00100000, False, child_pid)
+        assert child_handle, f"could not open provider child process {child_pid}"
+
+        helper.kill()
+        helper.wait(timeout=5)
+
+        wait_result = kernel32.WaitForSingleObject(child_handle, 5_000)
+        assert wait_result == 0, "provider child survived host termination"
+    finally:
+        if helper.poll() is None:
+            helper.kill()
+            helper.wait(timeout=5)
+        if child_handle:
+            import ctypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            if kernel32.WaitForSingleObject(child_handle, 0) != 0 and child_pid:
+                subprocess.run(
+                    ["taskkill", "/PID", str(child_pid), "/T", "/F"],
+                    capture_output=True,
+                    check=False,
+                )
+            kernel32.CloseHandle(child_handle)
+
+
+def test_snapshot_excludes_build_cache_and_keeps_declared_dependency_graph(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "SKILL.md").write_text("Use `references/contract.md`.", encoding="utf-8")
+    (tmp_path / "references").mkdir()
+    (tmp_path / "references" / "contract.md").write_text("contract", encoding="utf-8")
+    (tmp_path / "scripts" / "demo").mkdir(parents=True)
+    (tmp_path / "scripts" / "demo" / "cli.py").write_text(
+        "from .worker import run\n", encoding="utf-8"
+    )
+    (tmp_path / "scripts" / "demo" / "worker.py").write_text(
+        "def run(): return 'report.txt'\n", encoding="utf-8"
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        '[project.scripts]\ndemo = "demo.cli:run"\n', encoding="utf-8"
+    )
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "generated.py").write_text("noise = True\n", encoding="utf-8")
+
+    snapshot, profile = _build_text_snapshot(tmp_path, max_bytes=100_000)
+
+    assert "FILE: references/contract.md" in snapshot
+    assert "FILE: scripts/demo/cli.py" in snapshot
+    assert "FILE: scripts/demo/worker.py" in snapshot
+    assert "build/generated.py" not in snapshot
+    assert profile["required_complete"] == 1
+
+
+def test_snapshot_prioritizes_behavioral_tests_for_entrypoint_dependencies(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "SKILL.md").write_text("Demo provider target.", encoding="utf-8")
+    (tmp_path / "scripts" / "demo").mkdir(parents=True)
+    (tmp_path / "scripts" / "demo" / "cli.py").write_text(
+        "from .workflow import run\n", encoding="utf-8"
+    )
+    (tmp_path / "scripts" / "demo" / "workflow.py").write_text(
+        "def run(): return 'report.txt'\n", encoding="utf-8"
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        '[project.scripts]\ndemo = "demo.cli:run"\n', encoding="utf-8"
+    )
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "a_unrelated.py").write_text(
+        "noise = " + repr("x" * 1_200) + "\n", encoding="utf-8"
+    )
+    (tmp_path / "tests" / "z_workflow.py").write_text(
+        "from demo.workflow import run\n\ndef test_run(): assert run() == 'report.txt'\n",
+        encoding="utf-8",
+    )
+
+    snapshot, profile = _build_text_snapshot(tmp_path, max_bytes=1_500)
+
+    assert "FILE: tests/z_workflow.py" in snapshot
+    assert "FILE: tests/a_unrelated.py" not in snapshot
+    assert profile["required_complete"] == 1
+
+
+def test_real_document_skill_required_snapshot_fits_budget() -> None:
+    target = Path(
+        r"D:\project\skills\test2\.hypercode\skills\gjb438c-document-engineering"
+    )
+    if not target.is_dir():
+        pytest.skip("real document-engineering fixture is not installed")
+
+    _, profile = _build_text_snapshot(target, max_bytes=360_000)
+
+    assert profile["required_complete"] == 1
+
+
+def test_incomplete_required_snapshot_fails_before_provider_invocation(
+    tmp_path: Path,
+) -> None:
+    executor = RecordingCodexExecutor()
+    adapter = _installed_adapter(tmp_path, executor)
+    adapter.snapshot_max_bytes = 1
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "SKILL.md").write_text("required evidence", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="required evidence coverage is incomplete"):
+        adapter.invoke("CREATE_CANDIDATE", {"target_path": str(target)})
+
+    assert executor.calls == []

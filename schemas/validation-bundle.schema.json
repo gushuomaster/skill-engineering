@@ -4,22 +4,57 @@
   "required": [
     "validation_id", "inspection_id", "intent", "artifact_path",
     "artifact_manifest", "artifact_digest", "deterministic_evidence",
-    "advisory_evidence", "workspace_diff", "checks_fingerprint",
+    "advisory_evidence", "capability_preflight", "standard_dependencies", "limited_audit", "apply_requested", "workspace_diff", "checks_fingerprint",
     "pending_semantic_confirmation", "gate_result", "lifecycle_state"
   ],
   "properties": {
     "validation_id": {"type": "string", "minLength": 1},
     "inspection_id": {"type": "string", "minLength": 1},
-    "intent": {"enum": ["CREATE", "MODIFY", "FIX", "AUDIT_ONLY", "AUDIT_OPTIMIZE"]},
+    "intent": {"enum": ["CREATE", "AUDIT", "AUDIT_REPAIR", "TARGETED_REPAIR"]},
     "artifact_path": {"type": "string", "minLength": 1},
     "artifact_manifest": {"type": "object"},
     "artifact_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "deterministic_evidence": {"type": "array"},
     "advisory_evidence": {"type": "array"},
+    "capability_preflight": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["capability", "required", "status", "preferred_providers", "selected_provider", "fallback", "fallback_equivalence", "evidence"],
+        "properties": {
+          "capability": {"type": "string", "minLength": 1},
+          "required": {"type": "boolean"},
+          "status": {"enum": ["READY", "FALLBACK", "NOT_APPLICABLE", "BLOCKED"]},
+          "preferred_providers": {"type": "array", "items": {"type": "string"}},
+          "selected_provider": {"type": ["string", "null"]},
+          "fallback": {"type": ["string", "null"]},
+          "fallback_equivalence": {"enum": ["FULL", "ALTERNATIVE", "PARTIAL", "NONE"]},
+          "evidence": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
+      }
+    },
+    "standard_dependencies": {"type": "array"},
+    "limited_audit": {"type": "boolean"},
+    "apply_requested": {"type": "boolean"},
     "workspace_diff": {"type": "object"},
     "checks_fingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "pending_semantic_confirmation": {"const": true},
     "gate_result": {"type": "null"},
-    "lifecycle_state": {"const": "VALIDATED_PENDING_CONFIRMATION"}
+    "lifecycle_state": {"const": "VALIDATED_PENDING_CONFIRMATION"},
+    "coverage_status": {"enum": ["FULL", "PARTIAL", "COMPATIBILITY"]},
+    "deliverable_contract_provenance": {"type": "object"},
+    "baseline_capability_manifest": {"anyOf": [{"$ref": "capability-manifest.schema.json"}, {"type": "null"}]},
+    "baseline_capability_digest": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "candidate_capability_manifest": {"anyOf": [{"$ref": "capability-manifest.schema.json"}, {"type": "null"}]},
+    "candidate_capability_digest": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "capability_diff": {"anyOf": [{"$ref": "capability-diff.schema.json"}, {"type": "null"}]},
+    "capability_decision_check": {"type": ["object", "null"]},
+    "candidate_provider_evidence": {"type": "array"},
+    "capability_preservation": {
+      "type": ["string", "null"],
+      "enum": ["CAPABILITY_PRESERVED", "CAPABILITY_REGRESSION", "AUTHORIZATION_REQUIRED", "CAPABILITY_UNVERIFIABLE", null]
+    },
+    "semantic_workspace_diff": {"type": ["object", "null"]}
   }
 }

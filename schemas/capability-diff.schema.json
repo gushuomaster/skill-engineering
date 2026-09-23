@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Deterministic capability manifest diff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["baseline_manifest_digest", "candidate_manifest_digest", "changes"],
+  "properties": {
+    "baseline_manifest_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "candidate_manifest_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["capability_id", "kind", "changed_fields", "baseline_values", "candidate_values"],
+        "properties": {
+          "capability_id": {"type": "string", "minLength": 1},
+          "kind": {"enum": ["ADDED", "PRESERVED", "MODIFIED", "REMOVED", "NARROWED", "BROKEN", "UNVERIFIABLE"]},
+          "changed_fields": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "baseline_values": {"type": "array", "items": {"type": "string"}},
+          "candidate_values": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

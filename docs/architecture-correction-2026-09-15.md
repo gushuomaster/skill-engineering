@@ -18,7 +18,7 @@ The historical V1 specification treated “internal governance” as an autonomo
 | Codex | Interpret intent; choose one of five modes; perform RCA and issue classification; select mechanisms; author the complete candidate; decide `KEEP / MERGE / MOVE / DELETE`; evaluate evidence; confirm the semantic goal for the current artifact digest; request publication. |
 | `skill-engineer` | Tell Codex how and when to use Plugin capabilities through one entry Skill. |
 | Plugin | Package the entry Skill, scripts, Engine, schemas, validators, tests, references, configuration, and manifest. |
-| Provider Skills | Supply optional authoring help, review findings, or candidate suggestions. They never decide semantics or release. |
+| Provider Skills | Supply replaceable implementations for Required Capabilities. Provider presence is optional; applicable checks are not. They never decide semantics or release. |
 | Engine and validators | Copy and inventory files, isolate candidates, validate records, execute real checks, collect status and evidence, compute diffs, enforce release preconditions, and perform atomic publication. |
 | Quality Gate | Block release when deterministic evidence fails, is missing, was not executed, or lacks current Codex semantic confirmation. It does not infer whether the user goal was met. |
 
@@ -110,14 +110,14 @@ Legacy `GATE_PASSED`, `UNCHANGED_VALIDATED`, and `UNCHANGED_BLOCKED` remain only
 
 ## Provider boundaries
 
-Provider outputs cannot contain final Gate verdict, publication authorization, source replacement, or lifecycle-transition fields. Provider evidence is marked non-deterministic and non-reproducible. Unavailable or unpinned Providers produce an optional `NOT_EXECUTED` result with limitations. The Plugin does not fabricate semantic `CREATE_CANDIDATE` or `AUDIT_SKILL` success through internal Provider fallbacks; structure and reference checks remain normal Engine validators.
+Provider outputs cannot contain final Gate verdict, publication authorization, source replacement, or lifecycle-transition fields. Raw Provider evidence remains advisory until the Engine selects it for a Required Capability; the normalized selected result then becomes required execution evidence. The Engine separately derives applicable Required Capabilities and resolves each to an executed Provider, a `FULL` internal fallback, an `ALTERNATIVE` Provider, or `BLOCKED`. `PARTIAL` and `NONE` cannot support PASS. A Provider `NOT_EXECUTED` record is never itself a pass, and preflight selection without matching execution evidence becomes required `NOT_EXECUTED`.
 
 Use providers only where they fit:
 
-- `skill-creator`: optional Create authoring guidance.
-- `agent-skills-creator`: optional audit and simplification evidence.
-- `agents-md`: only when project instruction files are in the actual change scope.
-- `validate-skills`: only for checks it truly executes.
+- `skill-creator`: preferred creation/restructure Provider; isolated authoring and structure checks are the fallback.
+- `agent-skills-creator`: preferred audit/simplification Provider; internal rule, duplication, conflict, bloat, and instruction-quality checks are the fallback.
+- `agents-md`: preferred instruction-governance Provider; direct `AGENTS.md` / `CLAUDE.md` hierarchy inspection is the fallback.
+- `validate-skills`: preferred conformance Provider; deterministic structure, reference, path, script, and dependency validators are the fallback.
 - `plugin-creator`: Plugin packaging and development lifecycle only.
 
 ## Corrected deviations
@@ -130,7 +130,7 @@ Use providers only where they fit:
 | Codex governs rules | Detector attached action and target; governance copied them. | No | former `RuleFinding.candidate_action` and `candidate_target_layer` | Regex and similarity scores caused semantic actions. | Emit signals only; validate explicit Codex decisions. | P0 |
 | Create produces a complete Skill | Engine wrote one generic `SKILL.md` from raw requirement text. | No | former `_write_internal_candidate` | Structure could pass for an unusable Skill. | Require a complete Codex-authored candidate and a real behavioral result. | P0 |
 | Modify/Fix preserve unrelated content | Engine copied the source but changed its name to `staged-skill`; it did not implement the requested change. | No | former orchestrator name rewrite | Publishes unrelated semantic changes. | Stage the complete candidate byte-for-byte and compute a source diff. | P0 |
-| Providers remain optional advisers | Default internal fallbacks claimed Create/Audit capability. | Partial | former `InternalFallbackProvider` defaults | Fabricated expertise and PASS-like evidence. | Remove semantic fallbacks; report unavailable Providers as not executed. | P1 |
+| Providers remain replaceable | Earlier optional Provider evidence was disconnected from required-check coverage. | No | optional `NOT_EXECUTED` evidence could coexist with Gate PASS | Environment-dependent audit coverage. | Derive Required Capabilities first; execute trusted fallback or block PASS. | P0 |
 | Audit Only is read-only | Workspace did not stage, but the orchestrator still made semantic decisions. | Partial | former audit path plus `_make_decision` | Read-only result could contain fabricated conclusions. | Preserve no-write path and require Codex decisions and confirmation. | P0 |
 | Checks alone do not prove semantics | Gate emitted PASS whenever deterministic evidence had no blockers. | No | former `GateContext` without semantic input | Structure PASS became overall PASS. | Require digest-bound `SemanticConfirmation`. | P0 |
 | Publication is explicit and atomic | `run()` called `publish_atomic` immediately after Gate PASS. | No | former automatic call in `PipelineOrchestrator.run()` | Review and release collapsed into one action. | Return a staged ready outcome; publish through a separate call. | P0 |
@@ -149,7 +149,7 @@ Tests must prove observable boundaries rather than documentation wording:
 - candidate staging preserves the Skill name and source content remains untouched;
 - detector findings expose no governance action;
 - mechanism validation preserves Codex choices;
-- unavailable Providers are `NOT_EXECUTED`, not PASS;
+- unavailable Providers are `NOT_EXECUTED`; the corresponding Required Capability must execute a trusted fallback or become `INCOMPLETE`;
 - required regression absence or failure blocks the Gate;
 - passing checks without current Codex semantic confirmation fail;
 - a ready run does not publish until `publish(outcome)` is called;

@@ -13,8 +13,10 @@ from engine.contracts import validate_contract
 from engine.evidence import EvidenceCollector, InvalidEvidence
 from engine.mechanism_selection import PROMPT_RULE, prompt_rule_allowed
 from engine.models import (
+    CapabilityPreservationStatus,
     CheckResult,
     CheckStatus,
+    CoverageStatus,
     DecisionRecord,
     GateOutcome,
     GateResult,
@@ -70,11 +72,14 @@ class GateContext:
     intent: Intent
     state: LifecycleState
     authorized_to_modify: bool
-    candidate_requires_publish: bool
-    workspace_publishable: bool
+    candidate_requires_apply: bool
+    workspace_applicable: bool
     decision: DecisionRecord | None
     semantic_confirmed: bool = False
-    publish_requested: bool = False
+    apply_requested: bool = False
+    coverage_status: CoverageStatus = CoverageStatus.COMPATIBILITY
+    full_coverage_required: bool = False
+    capability_preservation: CapabilityPreservationStatus | None = None
 
 
 def _read_policy(path: Path) -> dict[str, object]:
@@ -189,7 +194,15 @@ def _collect_valid_evidence(
 
 
 def _is_trustworthy(result: CheckResult) -> bool:
-    return result.deterministic and result.reproducible and result.confidence > 0
+    deterministic = result.deterministic and result.reproducible
+    provider_contract = (
+        result.source.startswith("provider:")
+        and result.required
+        and result.status in {CheckStatus.PASS, CheckStatus.FAIL}
+        and bool(result.evidence)
+        and result.artifact_reference is not None
+    )
+    return (deterministic or provider_contract) and result.confidence > 0
 
 
 def _blocking_policy_for(
@@ -237,8 +250,13 @@ def _adjudicate_findings(
     context: GateContext,
     evidence: tuple[CheckResult, ...],
     policy: dict[str, object],
-) -> tuple[tuple[str, ...], tuple[str, ...], int, int, int]:
+) -> tuple[
+    tuple[str, ...], tuple[str, ...], int, int, int,
+    tuple[str, ...], tuple[str, ...],
+]:
     blocking: list[str] = []
+    incomplete: list[str] = []
+    framework_errors: list[str] = []
     warnings: list[str] = []
     decision = context.decision
     regression_disposition = (
@@ -269,14 +287,14 @@ def _adjudicate_findings(
 
     if invalid_required:
         _append_unique(
-            blocking,
+            incomplete,
             "B08: invalid required evidence: " + "; ".join(invalid_required),
         )
     for error in invalid_optional:
         _append_unique(warnings, f"invalid optional evidence: {error}")
     if missing_required:
         _append_unique(
-            blocking,
+            incomplete,
             "B08: missing required evidence: " + ", ".join(missing_required),
         )
 
@@ -293,9 +311,15 @@ def _adjudicate_findings(
         if result.required and (
             result.status in _ERROR_STATUSES or not _is_trustworthy(result)
         ):
-            _append_unique(blocking, _finding("B08", result))
+            target = (
+                framework_errors
+                if result.status is CheckStatus.ERROR
+                and result.source.startswith("engine.framework")
+                else incomplete
+            )
+            _append_unique(target, _finding("B08", result))
             if mapped_policy == "B11":
-                _append_unique(blocking, _finding("B11", result))
+                _append_unique(target, _finding("B11", result))
             continue
         advisory_rule_signal = result.check_id.startswith(
             ("rule-bloat", "rule_bloat", "rule-signal.")
@@ -342,11 +366,11 @@ def _adjudicate_findings(
         else:
             if not regression.required:
                 _append_unique(
-                    blocking,
+                    incomplete,
                     "B08: required regression result is marked optional",
                 )
             if not _is_trustworthy(regression):
-                _append_unique(blocking, _finding("B08", regression))
+                _append_unique(incomplete, _finding("B08", regression))
             if (
                 not regression.required
                 or regression.status is not CheckStatus.PASS
@@ -364,7 +388,7 @@ def _adjudicate_findings(
         _append_unique(warnings, "recommended regression is absent")
 
     if (
-        context.candidate_requires_publish
+        context.candidate_requires_apply
         and context.intent in _CHANGE_INTENTS
         and not context.authorized_to_modify
     ):
@@ -376,6 +400,8 @@ def _adjudicate_findings(
         len(required_ids & present_required_ids),
         len(missing_required),
         len(valid_evidence),
+        tuple(incomplete),
+        tuple(framework_errors),
     )
 
 
@@ -397,37 +423,80 @@ def adjudicate(
         required_count,
         missing_count,
         evidence_count,
+        incomplete,
+        framework_errors,
     ) = _adjudicate_findings(context, evidence, effective_policy)
     blocking = list(blocking)
+    incomplete = list(incomplete)
+    framework_errors = list(framework_errors)
     warnings = list(warnings)
     if not context.semantic_confirmed:
         _append_unique(
-            blocking,
+            incomplete,
             "B12: Codex semantic confirmation for the current artifact is absent",
         )
-    verdict = GateVerdict.FAIL if blocking else GateVerdict.PASS
+    if (
+        context.full_coverage_required
+        and context.coverage_status is not CoverageStatus.FULL
+        and not blocking
+    ):
+        _append_unique(
+            incomplete,
+            "B08: required audit coverage is not FULL",
+        )
+    if context.capability_preservation is CapabilityPreservationStatus.AUTHORIZATION_REQUIRED:
+        _append_unique(
+            blocking,
+            "B09: capability regression requires authorization",
+        )
+    elif context.capability_preservation is CapabilityPreservationStatus.CAPABILITY_REGRESSION:
+        _append_unique(
+            blocking,
+            "B04: broken capability regression cannot be authorized",
+        )
+    elif context.capability_preservation is CapabilityPreservationStatus.CAPABILITY_UNVERIFIABLE:
+        _append_unique(
+            incomplete,
+            "B08: capability preservation is unverifiable",
+        )
+    if framework_errors:
+        verdict = GateVerdict.ERROR
+    elif incomplete:
+        verdict = GateVerdict.INCOMPLETE
+    elif blocking:
+        verdict = GateVerdict.FAIL
+    else:
+        verdict = GateVerdict.PASS
 
-    publish_authorized = (
+    apply_authorized = (
         verdict is GateVerdict.PASS
         and context.intent in _CHANGE_INTENTS
         and context.authorized_to_modify
-        and context.candidate_requires_publish
-        and context.workspace_publishable
+        and context.candidate_requires_apply
+        and context.workspace_applicable
         and context.state is LifecycleState.VALIDATED
-        and context.publish_requested
+        and context.apply_requested
+        and (
+            not context.full_coverage_required
+            or context.coverage_status is CoverageStatus.FULL
+        )
     )
-    if verdict is GateVerdict.FAIL:
+    if verdict is GateVerdict.ERROR:
+        outcome = GateOutcome.ERROR
+    elif verdict is GateVerdict.INCOMPLETE:
+        outcome = GateOutcome.INCOMPLETE
+    elif verdict is GateVerdict.FAIL:
         outcome = (
             GateOutcome.UNCHANGED_BLOCKED
             if context.intent is Intent.AUDIT_ONLY
             else GateOutcome.REMEDIATION_REQUIRED
         )
-    elif publish_authorized:
-        outcome = GateOutcome.READY_TO_PUBLISH
+    elif apply_authorized:
+        outcome = GateOutcome.READY_TO_APPLY
     elif (
         context.intent is Intent.AUDIT_ONLY
-        or not context.candidate_requires_publish
-        or not context.publish_requested
+        or not context.candidate_requires_apply
+        or not context.apply_requested
     ):
         outcome = (
             GateOutcome.UNCHANGED_VALIDATED
@@ -439,7 +508,8 @@ def adjudicate(
 
     required_checks_summary = (
         f"{required_count} required checks received; "
-        f"{missing_count} missing; {len(blocking)} blocking findings."
+        f"{missing_count} missing; {len(incomplete)} incomplete; "
+        f"{len(framework_errors)} framework errors; {len(blocking)} blocking findings."
     )
     evidence_summary = (
         f"{evidence_count} valid evidence results; {len(warnings)} warnings."
@@ -447,11 +517,13 @@ def adjudicate(
     return GateResult(
         verdict=verdict,
         outcome=outcome,
-        blocking_findings=tuple(blocking),
+        blocking_findings=tuple((*framework_errors, *incomplete, *blocking)),
         warnings=tuple(warnings),
         required_checks_summary=required_checks_summary,
         evidence_summary=evidence_summary,
         semantic_confirmed=context.semantic_confirmed,
-        publish_authorized=publish_authorized,
+        apply_authorized=apply_authorized,
         policy_version=str(effective_policy["policy_version"]),
+        coverage_status=context.coverage_status,
+        capability_preservation=context.capability_preservation,
     )

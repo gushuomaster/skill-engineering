@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Provider-owned semantic capability manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "inspection_id", "inspection_nonce", "artifact_role",
+    "artifact_digest", "provider_identity", "capabilities",
+    "public_output_contract_status", "public_output_contract_evidence",
+    "evidence_origin"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "inspection_id": {"type": "string", "minLength": 1},
+    "inspection_nonce": {"type": "string", "minLength": 1},
+    "artifact_role": {"enum": ["BASELINE", "CANDIDATE"]},
+    "artifact_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "provider_identity": {"type": "string", "minLength": 1},
+    "capabilities": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/capability"}
+    },
+    "public_output_contract_status": {"enum": ["present", "absent", "unknown"]},
+    "public_output_contract_evidence": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "evidence_origin": {"const": "provider"}
+  },
+  "$defs": {
+    "stringArray": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capability_id", "public_name", "capability_type", "declared_status",
+        "implementation_status", "entrypoints", "supported_profiles",
+        "supported_deliverables", "templates", "schemas",
+        "validation_coverage", "public_claim_sources",
+        "implementation_evidence", "confidence", "evidence_state"
+      ],
+      "properties": {
+        "capability_id": {"type": "string", "minLength": 1},
+        "public_name": {"type": "string", "minLength": 1},
+        "capability_type": {"type": "string", "minLength": 1},
+        "declared_status": {"type": "string", "minLength": 1},
+        "implementation_status": {"type": "string", "minLength": 1},
+        "entrypoints": {"$ref": "#/$defs/stringArray"},
+        "supported_profiles": {"$ref": "#/$defs/stringArray"},
+        "supported_deliverables": {"$ref": "#/$defs/stringArray"},
+        "templates": {"$ref": "#/$defs/stringArray"},
+        "schemas": {"$ref": "#/$defs/stringArray"},
+        "validation_coverage": {"$ref": "#/$defs/stringArray"},
+        "public_claim_sources": {"$ref": "#/$defs/stringArray"},
+        "implementation_evidence": {"$ref": "#/$defs/stringArray"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "evidence_state": {"enum": ["COMPLETE", "UNVERIFIABLE"]}
+      }
+    }
+  }
+}

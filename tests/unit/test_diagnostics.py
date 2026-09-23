@@ -37,7 +37,10 @@ def decision(
 
 def test_fix_requires_root_cause() -> None:
     with pytest.raises(InvalidDecisionRecord, match="root cause"):
-        validate_classification(decision(intent=Intent.FIX))
+        validate_classification(decision(
+            intent=Intent.TARGETED_REPAIR,
+            primary=PrimaryIssueClass.IMPLEMENTATION_DEFECT,
+        ))
 
 
 def test_diagnostic_input_keeps_requirement_and_failure_evidence() -> None:
@@ -54,10 +57,10 @@ def test_create_accepts_no_root_cause() -> None:
     validate_classification(decision(intent=Intent.CREATE))
 
 
-def test_invariant_only_modify_accepts_no_root_cause() -> None:
+def test_targeted_invariant_change_accepts_no_fabricated_root_cause() -> None:
     validate_classification(
         decision(
-            intent=Intent.MODIFY,
+            intent=Intent.TARGETED_REPAIR,
             primary=PrimaryIssueClass.CAPABILITY_INVARIANT_CHANGE,
         )
     )
@@ -115,7 +118,7 @@ def test_insufficient_evidence_rejects_blank_limitation() -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("intent", "FIX"),
+        ("intent", "TARGETED_REPAIR"),
         ("primary_issue_class", "IMPLEMENTATION_DEFECT"),
         ("regression_disposition", "REQUIRED"),
     ],

@@ -61,3 +61,12 @@ def test_collects_applicable_ancestor_agents(tmp_path: Path) -> None:
     (nested / "SKILL.md").write_text("---\nname: demo\ndescription: demo\n---\n", encoding="utf-8")
     units = extract_rule_units(nested)
     assert any(unit.scope == "AGENTS.md" for unit in units)
+
+
+def test_collects_applicable_ancestor_claude_instructions(tmp_path: Path) -> None:
+    nested = tmp_path / "skills" / "demo"
+    nested.mkdir(parents=True)
+    (tmp_path / "CLAUDE.md").write_text("Never bypass repository policy.\n", encoding="utf-8")
+    (nested / "SKILL.md").write_text("---\nname: demo\ndescription: demo\n---\n", encoding="utf-8")
+    units = extract_rule_units(nested)
+    assert any(unit.scope == "CLAUDE.md" for unit in units)

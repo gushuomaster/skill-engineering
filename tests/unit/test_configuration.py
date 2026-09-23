@@ -26,9 +26,23 @@ def test_provider_configuration_is_separate_and_schema_shaped() -> None:
     assert isinstance(config, dict)
     assert isinstance(config.get("providers"), list)
     for provider in config["providers"]:
-        assert {"provider_id", "capability", "optional", "fallback_provider"}.issubset(provider)
+        assert {
+            "provider_id", "capability", "optional", "fallback_provider",
+            "fallback_equivalence",
+        }.issubset(provider)
+        assert provider["fallback_equivalence"] in {"FULL", "ALTERNATIVE", "PARTIAL", "NONE"}
         assert isinstance(provider.get("compatibility"), dict)
         assert "blocking_policy_ids" not in provider
+    assert "dynamic_provider_matches" not in config
+    assert [item["provider_id"] for item in config["providers"]] == [
+        "bundled.capability-contract",
+        "bundled.deliverable-contract",
+        "openai.skill-creator",
+    ]
+    bundled = config["providers"][:2]
+    assert all(item["optional"] is False for item in bundled)
+    assert all(item["availability"] == "packaged" for item in bundled)
+    assert all(item["resource_path"] == "providers/capability-contract-provider" for item in bundled)
 
 
 def test_openai_interface_keeps_implicit_invocation_enabled() -> None:

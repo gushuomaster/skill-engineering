@@ -12,6 +12,7 @@ from engine.models import (
     DeliverableContract,
     DeliverableEvidence,
     DeliverableEvidenceStatus,
+    DeliverableScopeConflict,
     LifecycleState,
     ProviderDescriptor,
     ProviderExecution,
@@ -135,7 +136,15 @@ def deliverable_contract_from_data(payload: Mapping[str, object]) -> Deliverable
     return DeliverableContract(
         raw["schema_version"], raw["inspection_id"], raw["target_digest"],
         raw["inspection_nonce"], raw["provider_identity"], deliverables,
-        tuple(raw["scope_conflicts"]), raw["applicability_status"],
+        tuple(
+            DeliverableScopeConflict(
+                summary=item["summary"],
+                blocking=item["blocking"],
+                evidence_refs=tuple(item["evidence_refs"]),
+            )
+            for item in raw["scope_conflicts"]
+        ),
+        raw["applicability_status"],
         raw["applicability_reason"], tuple(raw["applicability_evidence"]),
         raw["evidence_origin"],
     )

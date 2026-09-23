@@ -43,7 +43,7 @@ def test_cli_requires_explicit_intent_and_decision() -> None:
 
 def test_cli_read_only_pass_returns_json_and_exit_zero(tmp_path: Path) -> None:
     result = run_cli(
-        "audit this skill", "--intent", "AUDIT_ONLY",
+        "audit this skill", "--intent", "AUDIT",
         "--decision", str(decision_file(tmp_path, Intent.AUDIT_ONLY)),
         "--source", str(SKILL), "--confirmed-digest", digest_tree(SKILL),
         "--semantic-rationale", "Codex reviewed the current Skill", "--json",
@@ -51,7 +51,7 @@ def test_cli_read_only_pass_returns_json_and_exit_zero(tmp_path: Path) -> None:
     assert result.returncode == 0
     payload = json.loads(result.stdout)
     assert payload["gate_result"]["semantic_confirmed"] is True
-    assert payload["gate_result"]["publish_authorized"] is False
+    assert payload["gate_result"]["apply_authorized"] is False
 
 
 def test_cli_complete_audit_with_blocking_findings_uses_exit_one_without_copy(tmp_path: Path) -> None:
@@ -59,7 +59,7 @@ def test_cli_complete_audit_with_blocking_findings_uses_exit_one_without_copy(tm
     source.mkdir()
     (source / "SKILL.md").write_text("# broken", encoding="utf-8")
     result = run_cli(
-        "audit", "--intent", "AUDIT_ONLY",
+        "audit", "--intent", "AUDIT",
         "--decision", str(decision_file(tmp_path, Intent.AUDIT_ONLY)),
         "--source", str(source), "--confirmed-digest", digest_tree(source),
         "--semantic-rationale", "Codex reviewed the broken Skill",
@@ -94,7 +94,7 @@ def test_cli_create_runs_real_behavior_command_and_stages_only(tmp_path: Path) -
     )
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    assert payload["publication_ready"] is False
-    assert payload["gate_result"]["publish_authorized"] is False
-    assert payload["published_path"] is None
+    assert payload["apply_ready"] is False
+    assert payload["gate_result"]["apply_authorized"] is False
+    assert payload["applied_path"] is None
     assert not (destination / "demo").exists()

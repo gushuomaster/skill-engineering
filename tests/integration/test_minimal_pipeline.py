@@ -42,7 +42,7 @@ def test_explicit_mode_is_not_overridden_by_requirement_keywords(tmp_path: Path)
     outcome = PipelineOrchestrator().run(request)
 
     assert outcome.artifact_path == source
-    assert outcome.gate_result.publish_authorized is False
+    assert outcome.gate_result.apply_authorized is False
     assert not list(tmp_path.glob(".skill-engineering-*"))
 
 
@@ -53,7 +53,7 @@ def test_audit_only_invalid_skill_returns_findings_without_copy(tmp_path: Path) 
     outcome = PipelineOrchestrator().run(audit_request(source, tmp_path))
 
     assert outcome.outcome_type == "AUDIT_COMPLETE_BLOCKING_FINDINGS"
-    assert outcome.gate_result.verdict is GateVerdict.PASS
+    assert outcome.gate_result.verdict is GateVerdict.FAIL
     assert outcome.artifact_assessment.value == "BLOCKING_FINDINGS"
     assert not list(tmp_path.glob(".skill-engineering-*"))
 
@@ -80,13 +80,13 @@ def test_mutating_flows_inspect_and_classify_before_staging_candidate(intent: In
                        selected=selected, regression=regression, root_cause=root),
         source, candidate, ("reproduced",) if root else (), True, tmp_path,
         semantic_confirmation=confirmation(candidate), regression_runner=runner,
-        publish_requested=True,
+        apply_requested=True,
     ))
 
     assert trace.index(LifecycleState.INSPECTED) < trace.index(LifecycleState.CLASSIFIED)
     assert trace.index(LifecycleState.CLASSIFIED) < trace.index(LifecycleState.STAGED)
     assert outcome.artifact_path != source
-    assert outcome.publication_session is not None
+    assert outcome.apply_session is not None
     assert digest_tree(source) != ""
 
 

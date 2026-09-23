@@ -114,7 +114,9 @@ def validate_references(manifest: ArtifactManifest) -> tuple[CheckResult, ...]:
             if relative is not None
             else resolved in out_of_scope_required
         )
-        if relative is not None and relative.startswith("references/"):
+        if relative is None:
+            is_required = True
+        if relative is not None and relative.startswith(("references/", "scripts/", "validators/", "schemas/")):
             is_required = True
         check_id = "reference.required.exists" if is_required else "reference.optional.exists"
         exists = relative is not None and resolved.is_file()

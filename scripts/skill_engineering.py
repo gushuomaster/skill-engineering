@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI for phased Skill inspection, validation, confirmation, and publication."""
+"""CLI for Codex-led Skill audit, repair, validation, and safe apply."""
 from __future__ import annotations
 
 import argparse
@@ -13,17 +13,31 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from engine.contracts import validate_contract
-from engine.models import CheckResult, CheckStatus, Intent, LifecycleState
-from engine.orchestrator import (
-    EngineeringRequest, PipelineBlockedError, PipelineOrchestrator, publish,
+from engine.models import (
+    CheckResult, CheckStatus, DeliverableContractApplicability, Intent,
+    LifecycleState, ManagedOperationStatus, ManagedStatusResult,
+    StandardSkillRequirement,
 )
+from engine.applicability import AuditDimension
+from engine.host_adapters import (
+    build_codex_skill_adapter,
+    build_default_provider_adapters,
+)
+from engine.managed_completion import managed_status
+from engine.orchestrator import (
+    EngineeringRequest, PipelineBlockedError, PipelineOrchestrator, apply,
+)
+from engine.toolchain import MissingStandardDependencyError
+from engine.providers import ProviderGateway
 from engine.serialization import (
-    confirmation_from_data, decision_from_data, governance_from_data,
+    completion_receipt_from_data, confirmation_from_data, decision_from_data,
+    governance_from_data,
     inspection_from_data, outcome_to_data, to_data, validation_from_data,
 )
 
 
-PHASE_COMMANDS = frozenset({"inspect", "validate", "confirm", "publish"})
+PHASE_COMMANDS = frozenset({"inspect", "validate", "confirm", "apply", "status"})
+USER_MODES = (Intent.AUDIT, Intent.AUDIT_REPAIR, Intent.TARGETED_REPAIR)
 
 
 def _phase_parser() -> argparse.ArgumentParser:
@@ -31,8 +45,34 @@ def _phase_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     inspect = commands.add_parser("inspect")
     inspect.add_argument("--target", type=Path)
-    inspect.add_argument("--mode", required=True, choices=[item.value for item in Intent])
+    inspect.add_argument("--mode", required=True, choices=[item.value for item in USER_MODES])
     inspect.add_argument("--output", required=True, type=Path)
+    inspect.add_argument(
+        "--provider-skill", action="append", default=[],
+        help="Codex-selected Skill, optionally NAME=CAPABILITY for an open domain capability",
+    )
+    inspect.add_argument("--provider-timeout-seconds", type=int, default=300)
+    inspect.add_argument(
+        "--audit-dimension",
+        action="append",
+        choices=[item.value for item in AuditDimension],
+        default=None,
+    )
+    inspect.add_argument("--deliverable-not-required-rationale")
+    inspect.add_argument(
+        "--compatibility-no-default-providers",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    inspect.add_argument(
+        "--deliverable-contract-applicability",
+        choices=[item.value for item in DeliverableContractApplicability],
+        default=DeliverableContractApplicability.COMPATIBILITY.value,
+    )
+    inspect.add_argument(
+        "--require-standard-skill", action="append", default=[], metavar="NAME|RESPONSIBILITY|GAP",
+        help="Codex-selected required standard Skill and its user-visible coverage gap",
+    )
 
     validate = commands.add_parser("validate")
     validate.add_argument("--inspection", required=True, type=Path)
@@ -41,9 +81,11 @@ def _phase_parser() -> argparse.ArgumentParser:
     validate.add_argument("--candidate", type=Path)
     validate.add_argument("--target-parent", type=Path)
     validate.add_argument("--authorize-modify", action="store_true")
-    validate.add_argument("--publish-requested", action="store_true")
+    validate.add_argument("--apply-requested", action="store_true")
+    validate.add_argument("--continue-limited", action="store_true")
     validate.add_argument("--project-policy", type=Path)
     validate.add_argument("--behavior-command-json")
+    validate.add_argument("--contract-command-json")
     validate.add_argument("--regression-command-json")
     validate.add_argument("--output", required=True, type=Path)
 
@@ -52,9 +94,14 @@ def _phase_parser() -> argparse.ArgumentParser:
     confirm.add_argument("--semantic-confirmation", required=True, type=Path)
     confirm.add_argument("--output", required=True, type=Path)
 
-    publish_parser = commands.add_parser("publish")
-    publish_parser.add_argument("--outcome", required=True, type=Path)
-    publish_parser.add_argument("--output", type=Path)
+    apply_parser = commands.add_parser("apply")
+    apply_parser.add_argument("--outcome", required=True, type=Path)
+    apply_parser.add_argument("--output", type=Path)
+
+    status_parser = commands.add_parser("status")
+    status_parser.add_argument("--target", required=True, type=Path)
+    status_parser.add_argument("--receipt", type=Path)
+    status_parser.add_argument("--output", required=True, type=Path)
     return parser
 
 
@@ -72,8 +119,14 @@ def _legacy_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confirmed-digest")
     parser.add_argument("--semantic-rationale")
     parser.add_argument("--behavior-command-json")
+    parser.add_argument("--contract-command-json")
+    parser.add_argument(
+        "--deliverable-contract-applicability",
+        choices=[item.value for item in DeliverableContractApplicability],
+        default=DeliverableContractApplicability.COMPATIBILITY.value,
+    )
     parser.add_argument("--regression-command-json")
-    parser.add_argument("--publish", action="store_true")
+    parser.add_argument("--apply", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -92,6 +145,18 @@ def _load_decision(path: Path):
     payload = _read_json(path)
     validate_contract("decision-record", payload)
     return decision_from_data(payload)
+
+
+def _standard_requirements(values: list[str]) -> tuple[StandardSkillRequirement, ...]:
+    requirements: list[StandardSkillRequirement] = []
+    for value in values:
+        parts = value.split("|", 2)
+        if len(parts) != 3 or not all(part.strip() for part in parts):
+            raise ValueError(
+                "--require-standard-skill must be NAME|RESPONSIBILITY|GAP"
+            )
+        requirements.append(StandardSkillRequirement(*(part.strip() for part in parts)))
+    return tuple(requirements)
 
 
 def _command_runner(raw: str | None, check_id: str):
@@ -129,16 +194,57 @@ def _command_runner(raw: str | None, check_id: str):
 
 def _phase_main(argv: list[str]) -> int:
     args = _phase_parser().parse_args(argv)
-    orchestrator = PipelineOrchestrator()
     try:
         if args.command == "inspect":
-            bundle = orchestrator.inspect(Intent(args.mode), args.target)
+            provider_specs = tuple(
+                (value.split("=", 1) + [None])[:2]
+                if "=" in value else (value, None)
+                for value in args.provider_skill
+            )
+            selected_adapters = tuple(
+                build_codex_skill_adapter(
+                    name, capability=capability,
+                    config_path=ROOT / "config" / "providers.yaml",
+                    schema_path=ROOT / "schemas" / "provider-result.schema.json",
+                    timeout_seconds=args.provider_timeout_seconds,
+                )
+                for name, capability in provider_specs
+            )
+            default_adapters = (
+                ()
+                if args.compatibility_no_default_providers
+                else build_default_provider_adapters(
+                    ROOT,
+                    timeout_seconds=args.provider_timeout_seconds,
+                )
+            )
+            adapters = (*default_adapters, *selected_adapters)
+            gateway = ProviderGateway(adapters) if adapters else None
+            orchestrator = PipelineOrchestrator(
+                provider_gateway=gateway,
+                required_standard_skills=_standard_requirements(args.require_standard_skill),
+            )
+            bundle = orchestrator.inspect(
+                Intent(args.mode), args.target,
+                deliverable_contract_applicability=DeliverableContractApplicability(
+                    args.deliverable_contract_applicability
+                ),
+                audit_dimensions=(
+                    tuple(AuditDimension(item) for item in args.audit_dimension)
+                    if args.audit_dimension is not None else None
+                ),
+                deliverable_not_required_rationale=args.deliverable_not_required_rationale,
+            )
             payload = to_data(bundle)
             validate_contract("inspection-bundle", payload)
             _write_json(args.output, payload)
             return 0
         if args.command == "validate":
             inspection = inspection_from_data(_read_json(args.inspection))
+            gateway = None
+            if inspection.capability_provider_id is not None:
+                gateway = ProviderGateway(build_default_provider_adapters(ROOT))
+            orchestrator = PipelineOrchestrator(provider_gateway=gateway)
             governance_payload = _read_json(args.governance_decisions)
             if not isinstance(governance_payload, list):
                 raise ValueError("governance decisions must be a JSON array")
@@ -154,8 +260,10 @@ def _phase_main(argv: list[str]) -> int:
                 target_parent=target_parent,
                 authorized_to_modify=args.authorize_modify,
                 behavioral_runner=_command_runner(args.behavior_command_json, "behavioral.audit"),
+                contract_runner=_command_runner(args.contract_command_json, "contract.behavior"),
                 regression_runner=_command_runner(args.regression_command_json, "B07"),
-                publish_requested=args.publish_requested,
+                apply_requested=args.apply_requested,
+                continue_limited=args.continue_limited,
                 project_policy=args.project_policy,
             )
             payload = to_data(bundle)
@@ -163,6 +271,7 @@ def _phase_main(argv: list[str]) -> int:
             _write_json(args.output, payload)
             return 0
         if args.command == "confirm":
+            orchestrator = PipelineOrchestrator()
             validation = validation_from_data(_read_json(args.validation))
             confirmation = confirmation_from_data(_read_json(args.semantic_confirmation))
             outcome = orchestrator.confirm(validation, confirmation)
@@ -172,17 +281,46 @@ def _phase_main(argv: list[str]) -> int:
             if outcome.audit_execution.value == "INCOMPLETE":
                 return 2
             return 0 if outcome.artifact_assessment.value == "VALID" else 1
+        if args.command == "status":
+            receipt = None
+            if args.receipt is not None:
+                try:
+                    receipt = completion_receipt_from_data(_read_json(args.receipt))
+                except Exception as exc:
+                    result = ManagedStatusResult(
+                        ManagedOperationStatus.AUDIT_INCOMPLETE,
+                        False,
+                        None,
+                        f"invalid managed completion receipt: {exc}",
+                    )
+                    _write_json(args.output, to_data(result))
+                    return 2
+            result = managed_status(args.target, receipt)
+            _write_json(args.output, to_data(result))
+            return 0 if result.formal_completion else 2
+        orchestrator = PipelineOrchestrator()
         payload = _read_json(args.outcome)
         validation = validation_from_data(payload["validation"])
         confirmation = confirmation_from_data(payload["semantic_confirmation"])
         outcome = orchestrator.confirm(validation, confirmation)
-        result = publish(outcome)
-        output = {"outcome": outcome_to_data(outcome), "publication_result": to_data(result)}
+        receipt_payload = payload.get("completion_receipt")
+        if not isinstance(receipt_payload, dict):
+            raise ValueError("formal completion receipt is required for Apply")
+        receipt = completion_receipt_from_data(receipt_payload)
+        result = apply(outcome, receipt)
+        output = {"outcome": outcome_to_data(outcome), "apply_result": to_data(result)}
         if args.output:
             _write_json(args.output, output)
         else:
             print(json.dumps(output, ensure_ascii=False))
         return 0
+    except MissingStandardDependencyError as exc:
+        print(json.dumps({
+            "error": str(exc),
+            "action_required": "install_or_connect_or_continue_limited",
+            "missing_standard_skills": to_data(exc.missing),
+        }, ensure_ascii=False), file=sys.stderr)
+        return 3
     except PipelineBlockedError as exc:
         print(json.dumps({"error": str(exc), "gate_result": to_data(exc.gate_result)},
                          ensure_ascii=False), file=sys.stderr)
@@ -212,10 +350,14 @@ def _legacy_main(argv: list[str]) -> int:
             args.candidate, failure_evidence, args.authorize_modify, args.target_parent,
             semantic_confirmation=confirmation, project_policy=args.project_policy,
             behavioral_runner=_command_runner(args.behavior_command_json, "behavioral.create"),
+            contract_runner=_command_runner(args.contract_command_json, "contract.behavior"),
             regression_runner=_command_runner(args.regression_command_json, "B07"),
-            publish_requested=args.publish,
+            apply_requested=args.apply,
+            deliverable_contract_applicability=DeliverableContractApplicability(
+                args.deliverable_contract_applicability
+            ),
         ))
-        publication = publish(outcome) if args.publish else None
+        application = apply(outcome) if args.apply else None
     except PipelineBlockedError as exc:
         payload = {"gate_result": to_data(exc.gate_result),
                    "artifact_path": str(exc.artifact_path) if exc.artifact_path else None,
@@ -231,8 +373,8 @@ def _legacy_main(argv: list[str]) -> int:
             print(f"error: {exc}", file=sys.stderr)
         return 1
     payload = outcome_to_data(outcome)
-    payload["published_path"] = str(publication.published_path) if publication else None
-    payload["publication_result"] = to_data(publication) if publication else None
+    payload["applied_path"] = str(application.applied_path) if application else None
+    payload["apply_result"] = to_data(application) if application else None
     if args.json:
         print(json.dumps(payload, ensure_ascii=False))
     else:

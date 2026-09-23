@@ -15,8 +15,11 @@ SKILL = ROOT / "tests" / "fixtures" / "skills" / "minimal-valid"
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+    values = list(args)
+    if values and values[0] == "inspect":
+        values.insert(1, "--compatibility-no-default-providers")
     return subprocess.run(
-        [sys.executable, str(SCRIPT), *args],
+        [sys.executable, str(SCRIPT), *values],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -31,7 +34,7 @@ def test_cli_inspect_validate_confirm_json_round_trip(tmp_path: Path) -> None:
         "--target",
         str(SKILL),
         "--mode",
-        "AUDIT_ONLY",
+        "AUDIT",
         "--output",
         str(inspection_path),
     )
@@ -84,6 +87,23 @@ def test_cli_inspect_validate_confirm_json_round_trip(tmp_path: Path) -> None:
     assert outcome["gate_result"]["semantic_confirmed"] is True
 
 
+def test_cli_inspect_records_required_deliverable_coverage_context(tmp_path: Path) -> None:
+    inspection_path = tmp_path / "inspection-required.json"
+    inspected = run_cli(
+        "inspect", "--target", str(SKILL), "--mode", "AUDIT",
+        "--deliverable-contract-applicability", "REQUIRED",
+        "--output", str(inspection_path),
+    )
+
+    assert inspected.returncode == 0, inspected.stderr
+    inspection = json.loads(inspection_path.read_text(encoding="utf-8"))
+    assert inspection["deliverable_contract_applicability"] == "REQUIRED"
+    provenance = inspection["deliverable_contract_provenance"]
+    assert provenance["applicability"] == "REQUIRED"
+    assert provenance["coverage_status"] == "PARTIAL"
+    assert provenance["reason"] == "provider_unavailable"
+
+
 def test_cli_accepts_governance_decisions_from_inspection_ids(tmp_path: Path) -> None:
     source = tmp_path / "rules"
     source.mkdir()
@@ -94,7 +114,7 @@ def test_cli_accepts_governance_decisions_from_inspection_ids(tmp_path: Path) ->
     )
     inspection_path = tmp_path / "inspection.json"
     assert run_cli(
-        "inspect", "--target", str(source), "--mode", "AUDIT_ONLY",
+        "inspect", "--target", str(source), "--mode", "AUDIT",
         "--output", str(inspection_path),
     ).returncode == 0
     inspection = json.loads(inspection_path.read_text(encoding="utf-8"))
@@ -130,7 +150,7 @@ def test_cli_publish_is_independent_and_revalidates_outcome(tmp_path: Path) -> N
     destination.mkdir()
     inspection_path = tmp_path / "inspection.json"
     assert run_cli(
-        "inspect", "--target", str(source), "--mode", "MODIFY",
+        "inspect", "--target", str(source), "--mode", "TARGETED_REPAIR",
         "--output", str(inspection_path),
     ).returncode == 0
     governance = tmp_path / "governance.json"
@@ -142,7 +162,7 @@ def test_cli_publish_is_independent_and_revalidates_outcome(tmp_path: Path) -> N
         str(decision_file(tmp_path, Intent.MODIFY, selected=(MERGE_INVARIANT,))),
         "--governance-decisions", str(governance), "--candidate", str(candidate),
         "--target-parent", str(destination), "--authorize-modify",
-        "--publish-requested", "--output", str(validation_path),
+        "--apply-requested", "--output", str(validation_path),
     )
     assert validated.returncode == 0, validated.stderr
     validation = json.loads(validation_path.read_text(encoding="utf-8"))
@@ -159,11 +179,26 @@ def test_cli_publish_is_independent_and_revalidates_outcome(tmp_path: Path) -> N
     )
     assert confirmed.returncode == 0, confirmed.stderr
     assert not (destination / source.name).exists()
-    published_path = tmp_path / "published.json"
+    applied_path = tmp_path / "published.json"
     published = run_cli(
-        "publish", "--outcome", str(outcome_path), "--output", str(published_path),
+        "apply", "--outcome", str(outcome_path), "--output", str(applied_path),
     )
-    assert published.returncode == 0, published.stderr
-    payload = json.loads(published_path.read_text(encoding="utf-8"))
-    assert payload["publication_result"]["status"] == "PUBLISHED"
-    assert (destination / source.name / "change.txt").is_file()
+    assert published.returncode == 2
+    assert "formal completion receipt is required for Apply" in published.stderr
+    assert not (destination / source.name).exists()
+
+
+def test_cli_status_reports_invalid_receipt_as_audit_incomplete(tmp_path: Path) -> None:
+    receipt = tmp_path / "invalid-receipt.json"
+    receipt.write_text('{"inspection_id":"only-one-field"}', encoding="utf-8")
+    output = tmp_path / "status.json"
+
+    result = run_cli(
+        "status", "--target", str(SKILL), "--receipt", str(receipt),
+        "--output", str(output),
+    )
+
+    assert result.returncode == 2
+    status = json.loads(output.read_text(encoding="utf-8"))
+    assert status["status"] == "AUDIT_INCOMPLETE"
+    assert status["formal_completion"] is False

@@ -1,15 +1,16 @@
 # Pipeline Contract
 
-Codex controls the workflow. Use the four explicit phases in order: `inspect`, `validate`, `confirm`, and `publish`. `run()` is a compatibility wrapper around the first three phases and never publishes.
+Codex controls `inspect`, `validate`, `confirm`, `status`, and `apply`.
 
-1. `inspect --target ... --mode ... --output inspection.json` captures the source baseline and returns signals, stable finding IDs, Provider capabilities, and optional advisory Provider evidence. It makes no RCA or governance decision.
-2. Codex reviews the inspection, optionally consults Providers, authors `DecisionRecord`, `GovernanceDecision` records, and a complete candidate when the mode allows changes.
-3. `validate --inspection ... --decision-record ... --governance-decisions ... --candidate ... --output validation.json` rejects stale inspection data and incomplete finding coverage. It stages the candidate, runs checks, and returns separate `deterministic_evidence` and `advisory_evidence` in `VALIDATED_PENDING_CONFIRMATION`.
-4. Codex reviews that exact artifact and its evidence, then submits `confirm --validation ... --semantic-confirmation ... --output outcome.json`. Only this phase computes the final Gate.
-5. `publish --outcome outcome.json` is an independent call and works only for a current `READY_TO_PUBLISH` outcome.
+1. `inspect --target ... --mode AUDIT|AUDIT_REPAIR|TARGETED_REPAIR` records the immutable source baseline, per-run nonce, provenance, and a bundled Provider-owned baseline Capability Manifest. Codex supplies structured audit dimensions; the Engine never infers semantic scope from keywords or file suffixes.
+2. Codex performs RCA and authors the decision, governance records, and any complete isolated candidate.
+3. `validate` rejects stale inspection data, stages the candidate, runs the same bundled Provider against that staged artifact, computes a structured Capability Diff, validates authorization scope, executes applicable checks, and returns `VALIDATED_PENDING_CONFIRMATION`.
+4. `confirm` binds Codex's semantic decision to the exact artifact digest and computes `PASS`, `FAIL`, `INCOMPLETE`, or `ERROR`.
+5. A formal result includes a digest-chained `ManagedCompletionReceipt`. `status` reports `UNMANAGED_CHANGE` when no matching receipt exists.
+6. `apply` requires the matching receipt and is available only to an authorized repair at `PASS / READY_TO_APPLY`; it atomically replaces the source with digest and concurrent-change protection.
 
-Create uses a complete Codex-authored candidate in an independent directory. Modify and Fix use a candidate separate from the source and the Engine stages it again before validation. Audit Only remains read-only. Audit + Optimize audits first and stages only an authorized candidate. Modification authorization permits staging; it does not authorize publication. Without an explicit publish request, a valid candidate can pass the Gate while `publish_authorized` remains false. Gate readiness and atomic publication are separate operations.
+`AUDIT` runs commands in a disposable snapshot and verifies no source change. `AUDIT_REPAIR` requires a candidate and full-audit evidence. `TARGETED_REPAIR` requires evidence that the stated problem existed and targeted regression covering the necessary impact chain.
 
-For CLI execution, pass real behavior and regression commands as JSON string arrays through `--behavior-command-json` and `--regression-command-json`. Change-mode commands run in the staged artifact. Audit Only commands run in an isolated disposable snapshot. The Engine records command, exit status, stdout, and stderr and rechecks the source after each external command. Missing required commands remain `NOT_EXECUTED`.
+For a Codex-selected standard dependency, use `--require-standard-skill NAME|RESPONSIBILITY|GAP`. A missing dependency stops before validation and returns action-required status. Only an explicit `--continue-limited` proceeds, and its Gate result is `INCOMPLETE`.
 
-Audit outcomes use two dimensions: `AuditExecution.COMPLETE | INCOMPLETE` and `ArtifactAssessment.VALID | FINDINGS | BLOCKING_FINDINGS | UNKNOWN`. CLI exit code 0 means complete and valid, 1 means complete with findings, and 2 means incomplete or a system/contract error.
+The plugin cannot intercept every out-of-band write. It detects unmanaged state through receipt and digest comparison and must not claim a platform-level write hook.

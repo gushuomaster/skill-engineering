@@ -8,6 +8,7 @@ REFERENCE_NAMES = {
     "issue-classification.md",
     "mechanism-selection.md",
     "rule-governance.md",
+    "required-capabilities.md",
     "provider-contracts.md",
     "quality-gate.md",
 }
@@ -19,17 +20,16 @@ def read_skill() -> str:
 
 def test_skill_entry_is_thin_and_routes_every_mode() -> None:
     body = read_skill()
-    assert all(mode in body for mode in ["Create", "Modify", "Fix", "Audit Only", "Audit + Optimize"])
+    assert all(mode in body for mode in ["AUDIT", "AUDIT_REPAIR", "TARGETED_REPAIR"])
     assert len(body.splitlines()) < 220
-    assert "scripts/skill_engineering.py" in body
+    assert "safe apply" in body.lower()
 
 
 def test_audit_guidance_forbids_transient_target_writes() -> None:
     body = read_skill()
-    assert "byte-for-byte unchanged throughout the run" in body
-    assert "PYTHONDONTWRITEBYTECODE=1" in body
-    assert "Do not run `py_compile`" in body
-    assert "instead of writing and cleaning up afterward" in body
+    assert "prove the source tree did not change" in body
+    assert "disposable snapshot" in body
+    assert "never a full `PASS`" in body
 
 
 def test_every_reference_is_directly_linked_from_skill_md() -> None:

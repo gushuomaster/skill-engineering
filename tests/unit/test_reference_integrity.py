@@ -39,9 +39,21 @@ def test_reference_escaping_artifact_root_is_not_verified(tmp_path: Path) -> Non
     (tmp_path / "outside.md").write_text("inside", encoding="utf-8")
     (tmp_path / "SKILL.md").write_text("---\nname: demo\ndescription: x\n---\n[bad](../outside.md)\n", encoding="utf-8")
     manifest = build_artifact_manifest(tmp_path, Intent.CREATE, None)
-    result = _check(validate_references(manifest), "reference.optional.exists")
-    assert result.status is CheckStatus.WARN
+    result = _check(validate_references(manifest), "reference.required.exists")
+    assert result.status is CheckStatus.FAIL
+    assert result.required is True
     assert "escapes artifact root" in result.evidence[0]
+
+
+def test_missing_script_link_is_required_failure(tmp_path: Path) -> None:
+    (tmp_path / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: x\n---\n[runner](scripts/run.py)\n",
+        encoding="utf-8",
+    )
+    manifest = build_artifact_manifest(tmp_path, Intent.CREATE, None)
+    result = _check(validate_references(manifest), "reference.required.exists")
+    assert result.status is CheckStatus.FAIL
+    assert result.required is True
 
 
 def test_relative_link_is_classified_by_resolved_artifact_path(tmp_path: Path) -> None:

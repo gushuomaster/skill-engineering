@@ -62,6 +62,22 @@ def _declared_assets(frontmatter: dict[str, object] | None) -> tuple[str, ...]:
     return ()
 
 
+def _declared_paths(frontmatter: dict[str, object] | None, key: str) -> tuple[str, ...]:
+    if not frontmatter:
+        return ()
+    raw = frontmatter.get(key, ())
+    if isinstance(raw, str):
+        return (raw,)
+    if isinstance(raw, (list, tuple)):
+        return tuple(item for item in raw if isinstance(item, str))
+    return ()
+
+
+def _unsafe_relative_path(value: str) -> bool:
+    path = Path(value)
+    return path.is_absolute() or ".." in path.parts or not value.strip()
+
+
 def _authoritative_files(
     root: Path,
     manifest: ArtifactManifest,
@@ -133,16 +149,24 @@ def validate_skill_structure(manifest: ArtifactManifest) -> tuple[CheckResult, .
                            placeholder_evidence or ("no placeholder tokens found",)))
 
     declared_assets = _declared_assets(frontmatter)
-    missing_assets = tuple(item for item in declared_assets if not (root / item).is_file())
+    invalid_assets = tuple(item for item in declared_assets if _unsafe_relative_path(item))
+    missing_assets = tuple(
+        item for item in declared_assets
+        if item not in invalid_assets and not (root / item).is_file()
+    )
+    asset_failures = invalid_assets + missing_assets
     results.append(_result("skill.structure.critical_assets", subject,
-                           CheckStatus.FAIL if missing_assets else CheckStatus.PASS, True,
-                           "missing critical assets: " + ", ".join(missing_assets) if missing_assets else "critical assets verified"))
+                           CheckStatus.FAIL if asset_failures else CheckStatus.PASS, True,
+                           "invalid or missing critical assets: " + ", ".join(asset_failures) if asset_failures else "critical assets verified"))
 
     schema_files = tuple(path for path in manifest.files if path.startswith("schemas/") and path.endswith(".schema.json"))
     missing_schema = frontmatter.get("required_schemas", ()) if frontmatter else ()
     if isinstance(missing_schema, str):
         missing_schema = (missing_schema,)
-    missing_schema = tuple(item for item in missing_schema if isinstance(item, str) and not (root / item).is_file())
+    missing_schema = tuple(
+        item for item in missing_schema
+        if isinstance(item, str) and (_unsafe_relative_path(item) or not (root / item).is_file())
+    )
     results.append(_result("skill.structure.schema", subject,
                            CheckStatus.FAIL if missing_schema else CheckStatus.PASS, True,
                            "missing schema files: " + ", ".join(missing_schema) if missing_schema else f"schema files verified ({len(schema_files)})"))
@@ -151,11 +175,31 @@ def validate_skill_structure(manifest: ArtifactManifest) -> tuple[CheckResult, .
     results.append(_result("skill.structure.executables", subject, CheckStatus.PASS if executable_ok else CheckStatus.FAIL,
                            True, "executable assets are inventoried" if executable_ok else "executable asset inventory mismatch"))
 
+    declared_scripts = _declared_paths(frontmatter, "required_scripts")
+    invalid_scripts = tuple(
+        item for item in declared_scripts
+        if _unsafe_relative_path(item)
+    )
+    missing_scripts = tuple(
+        item for item in declared_scripts
+        if item not in invalid_scripts and not (root / item).is_file()
+    )
+    script_failures = invalid_scripts + missing_scripts
+    results.append(_result(
+        "skill.structure.scripts", subject,
+        CheckStatus.FAIL if script_failures else CheckStatus.PASS, True,
+        "invalid or missing required scripts: " + ", ".join(script_failures)
+        if script_failures else "required scripts verified",
+    ))
+
     dependencies = frontmatter.get("required_dependencies", frontmatter.get("dependencies", ())) if frontmatter else ()
     if isinstance(dependencies, str):
         dependencies = (dependencies,)
     dependencies = tuple(item for item in dependencies if isinstance(item, str))
-    missing_dependencies = tuple(item for item in dependencies if not (root / item).exists())
+    missing_dependencies = tuple(
+        item for item in dependencies
+        if _unsafe_relative_path(item) or not (root / item).exists()
+    )
     results.append(_result("skill.structure.required_dependencies", subject,
                            CheckStatus.FAIL if missing_dependencies else CheckStatus.PASS, True,
                            "missing required dependencies: " + ", ".join(missing_dependencies) if missing_dependencies else "required dependencies verified"))

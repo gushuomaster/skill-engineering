@@ -37,7 +37,7 @@ def test_provider_capability_unavailable_is_explicit_when_disabled(capability: s
     assert result.limitations
 
 
-def test_orchestrator_routes_provider_result_through_optional_gate_evidence(tmp_path: Path) -> None:
+def test_selected_provider_finding_becomes_required_gate_failure(tmp_path: Path) -> None:
     source = Path(__file__).parents[1] / "fixtures" / "skills" / "minimal-valid"
     descriptor = ProviderDescriptor(
         "external.audit",
@@ -77,6 +77,12 @@ def test_orchestrator_routes_provider_result_through_optional_gate_evidence(tmp_
     )
     outcome = PipelineOrchestrator(provider_gateway=ProviderGateway([provider])).run(request)
 
-    assert outcome.gate_result.verdict.value == "PASS"
+    assert outcome.gate_result.verdict.value == "FAIL"
+    assert outcome.gate_result.apply_authorized is False
+    assert any(
+        item.source == "provider:external.audit" and item.required
+        and item.status.value == "FAIL"
+        for item in outcome.deterministic_evidence
+    )
     assert any("advisory finding" in warning for warning in outcome.gate_result.warnings)
     assert any("provider limitation" in warning for warning in outcome.gate_result.warnings)

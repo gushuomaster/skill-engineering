@@ -39,9 +39,9 @@ _DEFECT_CLASSES = frozenset(
 def _requires_root_cause(record: DecisionRecord) -> bool:
     if record.primary_issue_class is PrimaryIssueClass.INSUFFICIENT_EVIDENCE:
         return False
-    if record.intent is Intent.FIX:
-        return True
-    return record.intent in {Intent.MODIFY, Intent.AUDIT_ONLY, Intent.AUDIT_OPTIMIZE} and (
+    return record.intent in {
+        Intent.TARGETED_REPAIR, Intent.AUDIT, Intent.AUDIT_REPAIR,
+    } and (
         record.primary_issue_class in _DEFECT_CLASSES
     )
 

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "inspection_id", "operation_mode", "source_digest", "candidate_digest",
+    "baseline_capability_digest", "candidate_capability_digest",
+    "validation_bundle_digest", "semantic_confirmation_digest",
+    "coverage_status", "capability_preservation", "gate_verdict",
+    "gate_outcome", "formal_completion"
+  ],
+  "properties": {
+    "inspection_id": {"type": "string", "minLength": 1},
+    "operation_mode": {"enum": ["CREATE", "AUDIT", "AUDIT_REPAIR", "TARGETED_REPAIR"]},
+    "source_digest": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "candidate_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "baseline_capability_digest": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "candidate_capability_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "validation_bundle_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "semantic_confirmation_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "coverage_status": {"const": "FULL"},
+    "capability_preservation": {"const": "CAPABILITY_PRESERVED"},
+    "gate_verdict": {"const": "PASS"},
+    "gate_outcome": {"enum": ["READY_TO_APPLY", "AUDIT_COMPLETE_VALID"]},
+    "formal_completion": {"const": true}
+  }
+}

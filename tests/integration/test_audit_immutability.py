@@ -87,10 +87,10 @@ def _run(source: Path, tmp_path: Path, runner):
 def _assert_source_change_invalidates(outcome, *, added=(), modified=(), deleted=()) -> None:
     assert outcome.audit_execution is AuditExecution.INCOMPLETE
     assert outcome.artifact_assessment is ArtifactAssessment.UNKNOWN
-    assert outcome.gate_result.verdict is GateVerdict.FAIL
+    assert outcome.gate_result.verdict is GateVerdict.INCOMPLETE
     assert outcome.gate_result.outcome is not GateOutcome.UNCHANGED_VALIDATED
     assert outcome.gate_result.semantic_confirmed is False
-    assert outcome.gate_result.publish_authorized is False
+    assert outcome.gate_result.apply_authorized is False
     assert outcome.workspace_diff.added == added
     assert outcome.workspace_diff.modified == modified
     assert outcome.workspace_diff.deleted == deleted
@@ -175,8 +175,8 @@ def test_a6_failed_command_without_source_change_is_incomplete(tmp_path: Path) -
 
     assert outcome.audit_execution is AuditExecution.INCOMPLETE
     assert outcome.artifact_assessment is ArtifactAssessment.UNKNOWN
-    assert outcome.gate_result.verdict is GateVerdict.FAIL
-    assert outcome.gate_result.semantic_confirmed is False
+    assert outcome.gate_result.verdict is GateVerdict.INCOMPLETE
+    assert outcome.gate_result.semantic_confirmed is True
     assert outcome.workspace_diff.added == ()
     assert outcome.workspace_diff.modified == ()
     assert outcome.workspace_diff.deleted == ()

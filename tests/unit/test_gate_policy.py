@@ -51,8 +51,8 @@ def _context() -> GateContext:
         intent=Intent.CREATE,
         state=LifecycleState.VALIDATED,
         authorized_to_modify=True,
-        candidate_requires_publish=True,
-        workspace_publishable=True,
+        candidate_requires_apply=True,
+        workspace_applicable=True,
         decision=None,
         semantic_confirmed=True,
     )
@@ -125,7 +125,7 @@ def test_project_policy_warning_extension_appears_in_gate_result() -> None:
 
 def test_project_policy_blocking_extension_affects_verdict() -> None:
     policy = load_gate_policy(FIXTURE_ROOT / "valid-stricter-policy.yaml")
-    evidence = _passing_evidence() + (
+    evidence = _passing_evidence() + (_check("project.security"),) + (
         _check(
             "P_CUSTOM",
             required=False,

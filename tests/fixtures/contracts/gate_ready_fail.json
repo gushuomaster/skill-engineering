@@ -1,1 +1,1 @@
-{"verdict":"FAIL","outcome":"READY_TO_PUBLISH","blocking_findings":[],"warnings":[],"required_checks_summary":"bad","evidence_summary":"bad","semantic_confirmed":false,"publish_authorized":false,"policy_version":"v1"}
+{"verdict":"FAIL","outcome":"READY_TO_APPLY","blocking_findings":[],"warnings":[],"required_checks_summary":"bad","evidence_summary":"bad","semantic_confirmed":false,"apply_authorized":false,"policy_version":"v1"}

@@ -1,5 +1,7 @@
 # Audit Immutability and Phased Workflow Validation
 
+> Historical validation record. Provider optionality and Gate verdict semantics in sections 7-9 were superseded by [Required Capability Model](required-capability-model.md): target defects now yield Gate `FAIL`, unavailable required capabilities yield `INCOMPLETE`, and neither can publish.
+
 Date: 2026-09-16
 
 Implementation commit: `6d6703653c4452e1ae88228d884f2e8e0fe984f3`
@@ -110,7 +112,7 @@ GOVERN_AGENT_INSTRUCTIONS
 CHECK_SKILL_CONFORMANCE
 ```
 
-Each Provider record contains provider ID, capability, invocation phase, status, summary, `deterministic=false`, and `reproducible=false` unless reproducibility is actually established. Missing optional Providers are recorded as `NOT_EXECUTED`; there is no simulated Python fallback.
+Each Provider record contains provider ID, capability, invocation phase, status, summary, `deterministic=false`, and `reproducible=false` unless reproducibility is actually established. Missing Providers are recorded as `NOT_EXECUTED`. A separate Required Capability layer now executes trusted internal validators where available; this is real fallback evidence, not simulated Provider success.
 
 Validation emits `deterministic_evidence` and `advisory_evidence` as separate fields. Providers cannot author final RCA, choose `KEEP/MERGE/MOVE/DELETE`, submit semantic confirmation, change Gate policy, or authorize publication. The `GOVERN_AGENT_INSTRUCTIONS` capability is recorded but not invoked unless `AGENTS.md` or `CLAUDE.md` is genuinely in scope.
 
@@ -123,7 +125,7 @@ AuditExecution: COMPLETE | INCOMPLETE
 ArtifactAssessment: VALID | FINDINGS | BLOCKING_FINDINGS | UNKNOWN
 ```
 
-A complete audit of a defective Skill can therefore return `COMPLETE/BLOCKING_FINDINGS` with Gate verdict `PASS` and outcome `AUDIT_COMPLETE_BLOCKING_FINDINGS`. This means the audit process was trustworthy and successfully found severe target defects. `INCOMPLETE/UNKNOWN` is reserved for an untrustworthy audit, missing required execution, a command/system failure, or a changed source baseline.
+A complete audit of a defective Skill returns `COMPLETE/BLOCKING_FINDINGS` with Gate verdict `FAIL` and outcome `AUDIT_COMPLETE_BLOCKING_FINDINGS`. `INCOMPLETE/UNKNOWN` is reserved for an untrustworthy audit, missing required execution, or a changed source baseline; framework failures use Gate `ERROR`.
 
 ## 9. State mapping
 
@@ -230,7 +232,7 @@ Observed results:
 - Create inspect/validate/confirm: `0/0/0`, confirmed outcome `VALIDATED`, no publication.
 - Fix inspect/validate/confirm: `0/0/0`; source defect reproduced with exit 1; staged behavior and B07 both passed.
 - Clean Audit Only inspect/validate/confirm: `0/0/0`, `COMPLETE/VALID`, source digest unchanged.
-- Broken target Audit Only: confirmation exit 1, `COMPLETE/BLOCKING_FINDINGS`, Gate process verdict PASS.
+- Broken target Audit Only: confirmation exit 1, `COMPLETE/BLOCKING_FINDINGS`, Gate verdict `FAIL`.
 - Advice-only legacy invocation: exit 2 for missing explicit intent/decision, no writes and no publication.
 - Malicious snapshot runner: exit 0, six mutations confined to the snapshot, source unchanged.
 - Concurrent source writer: process exit 0, confirm exit 2, `INCOMPLETE/UNKNOWN`, B10 failure and real diff.

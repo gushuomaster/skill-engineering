@@ -1,24 +1,24 @@
 from pathlib import Path
 
+import pytest
+
 from engine.mechanism_selection import MERGE_INVARIANT
 from engine.models import Intent, PrimaryIssueClass
-from engine.orchestrator import EngineeringRequest, PipelineOrchestrator, publish
+from engine.orchestrator import EngineeringRequest, PipelineOrchestrator, apply
 from tests.support import codex_decision, confirmation, copy_candidate
 
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "skills" / "minimal-valid"
 
 
-def test_audit_optimize_without_candidate_remains_read_only(tmp_path: Path) -> None:
-    outcome = PipelineOrchestrator().run(EngineeringRequest(
-        "audit and optimize", Intent.AUDIT_OPTIMIZE,
-        codex_decision(Intent.AUDIT_OPTIMIZE),
-        FIXTURE, None, (), True, tmp_path,
-        semantic_confirmation=confirmation(FIXTURE),
-    ))
-    assert outcome.artifact_path == FIXTURE
-    assert outcome.gate_result.publish_authorized is False
-    assert outcome.publication_session is None
+def test_audit_repair_requires_a_complete_candidate(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="complete candidate"):
+        PipelineOrchestrator().run(EngineeringRequest(
+            "audit and repair", Intent.AUDIT_REPAIR,
+            codex_decision(Intent.AUDIT_REPAIR),
+            FIXTURE, None, (), True, tmp_path,
+            semantic_confirmation=confirmation(FIXTURE),
+        ))
     assert not list(tmp_path.glob(".skill-engineering-*"))
 
 
@@ -39,12 +39,11 @@ def test_ready_candidate_is_not_published_until_explicit_call(tmp_path: Path) ->
                        selected=(MERGE_INVARIANT,)),
         source, candidate, (), True, source.parent,
         semantic_confirmation=confirmation(candidate),
-        publish_requested=True,
+        apply_requested=True,
     ))
 
     assert (source / "SKILL.md").read_text(encoding="utf-8") == original
-    assert outcome.gate_result.publish_authorized is True
-    result = publish(outcome)
-    assert result.published_path == source
-    assert (source / "SKILL.md").read_text(encoding="utf-8") == changed
-    assert result.backup_path is not None
+    assert outcome.gate_result.apply_authorized is True
+    with pytest.raises(ValueError, match="formal completion receipt"):
+        apply(outcome)
+    assert (source / "SKILL.md").read_text(encoding="utf-8") == original

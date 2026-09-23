@@ -7,7 +7,7 @@ import pytest
 from engine.inventory import digest_tree
 from engine.mechanism_selection import IMPLEMENTATION_FIX
 from engine.models import Intent, PrimaryIssueClass, RegressionDisposition
-from engine.orchestrator import EngineeringRequest, PipelineOrchestrator, publish
+from engine.orchestrator import EngineeringRequest, PipelineOrchestrator, apply
 from engine.workspace import CandidateChangedError
 from scripts.skill_engineering import _command_runner
 from tests.support import codex_decision, confirmation, copy_candidate
@@ -42,7 +42,7 @@ def _request(source: Path, candidate: Path, target_parent: Path) -> EngineeringR
         semantic_confirmation=confirmation(candidate),
         behavioral_runner=behavior,
         regression_runner=regression,
-        publish_requested=True,
+        apply_requested=True,
     )
 
 
@@ -62,12 +62,13 @@ def test_publish_rejects_candidate_changed_after_semantic_confirmation(tmp_path:
         encoding="utf-8",
     )
 
-    with pytest.raises(CandidateChangedError, match="after semantic confirmation"):
-        publish(outcome)
+    with pytest.raises(ValueError, match="formal completion receipt"):
+        apply(outcome)
     assert (source / "scripts" / "check.py").read_bytes() == source_before
 
     reconfirmed = PipelineOrchestrator().run(
         _request(source, outcome.artifact_path, published_parent)
     )
-    result = publish(reconfirmed)
-    assert result.published_digest == digest_tree(outcome.artifact_path)
+    with pytest.raises(ValueError, match="formal completion receipt"):
+        apply(reconfirmed)
+    assert (source / "scripts" / "check.py").read_bytes() == source_before

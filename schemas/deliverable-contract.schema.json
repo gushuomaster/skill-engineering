@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "inspection_id",
+    "target_digest",
+    "inspection_nonce",
+    "provider_identity",
+    "deliverables",
+    "scope_conflicts",
+    "applicability_status",
+    "applicability_reason",
+    "applicability_evidence",
+    "evidence_origin"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "inspection_id": {"type": "string", "minLength": 1},
+    "target_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "inspection_nonce": {"type": "string", "minLength": 1},
+    "provider_identity": {"type": "string", "minLength": 1},
+    "deliverables": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/deliverable"}
+    },
+    "scope_conflicts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/scopeConflict"}
+    },
+    "applicability_status": {"enum": ["applicable", "not_applicable", "unknown"]},
+    "applicability_reason": {"type": "string", "minLength": 1},
+    "applicability_evidence": {"type": "array", "items": {"type": "string"}},
+    "evidence_origin": {"enum": ["provider", "target_self_report"]}
+  },
+  "$defs": {
+    "status": {"enum": ["present", "missing", "unknown", "not_applicable"]},
+    "scopeConflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "blocking", "evidence_refs"],
+      "properties": {
+        "summary": {"type": "string", "minLength": 1},
+        "blocking": {
+          "type": "boolean",
+          "description": "True only for an actual contradictory public capability claim; intentional registered-only or non-public scope is informational."
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "deliverable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deliverable_id",
+        "declared_status",
+        "declarations",
+        "exposure_status",
+        "exposure_entrypoint",
+        "exposure_selector",
+        "exposure_evidence",
+        "implementation_status",
+        "implementation_dispatch_route",
+        "implementation_artifact_pattern",
+        "implementation_evidence",
+        "behavioral_status",
+        "behavioral_commands",
+        "expected_artifacts",
+        "behavioral_evidence"
+      ],
+      "properties": {
+        "deliverable_id": {"type": "string", "minLength": 1},
+        "declared_status": {"enum": ["implemented", "planned", "registered_only", "unknown"]},
+        "declarations": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "exposure_status": {"$ref": "#/$defs/status"},
+        "exposure_entrypoint": {"type": ["string", "null"]},
+        "exposure_selector": {"type": ["string", "null"]},
+        "exposure_evidence": {"type": "array", "items": {"type": "string"}},
+        "implementation_status": {"$ref": "#/$defs/status"},
+        "implementation_dispatch_route": {"type": ["string", "null"]},
+        "implementation_artifact_pattern": {"type": ["string", "null"]},
+        "implementation_evidence": {"type": "array", "items": {"type": "string"}},
+        "behavioral_status": {"$ref": "#/$defs/status"},
+        "behavioral_commands": {"type": "array", "items": {"type": "string"}},
+        "expected_artifacts": {"type": "array", "items": {"type": "string"}},
+        "behavioral_evidence": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

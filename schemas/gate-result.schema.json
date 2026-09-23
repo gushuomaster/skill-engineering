@@ -1,1 +1,62 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["verdict","outcome","blocking_findings","warnings","required_checks_summary","evidence_summary","semantic_confirmed","publish_authorized","policy_version"],"properties":{"verdict":{"enum":["PASS","FAIL"]},"outcome":{"enum":["READY_TO_PUBLISH","VALIDATED","UNCHANGED_VALIDATED","UNCHANGED_BLOCKED","REMEDIATION_REQUIRED","AUDIT_COMPLETE_VALID","AUDIT_COMPLETE_FINDINGS","AUDIT_COMPLETE_BLOCKING_FINDINGS","AUDIT_INCOMPLETE"]},"blocking_findings":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}},"required_checks_summary":{"type":"string","minLength":1},"evidence_summary":{"type":"string","minLength":1},"semantic_confirmed":{"type":"boolean"},"publish_authorized":{"type":"boolean"},"policy_version":{"type":"string","minLength":1}},"allOf":[{"if":{"properties":{"verdict":{"const":"PASS"}},"required":["verdict"]},"then":{"properties":{"semantic_confirmed":{"const":true}}}},{"if":{"properties":{"outcome":{"const":"READY_TO_PUBLISH"}},"required":["outcome"]},"then":{"properties":{"verdict":{"const":"PASS"},"semantic_confirmed":{"const":true},"publish_authorized":{"const":true}}}},{"if":{"properties":{"outcome":{"enum":["VALIDATED","UNCHANGED_VALIDATED","UNCHANGED_BLOCKED","REMEDIATION_REQUIRED","AUDIT_COMPLETE_VALID","AUDIT_COMPLETE_FINDINGS","AUDIT_COMPLETE_BLOCKING_FINDINGS","AUDIT_INCOMPLETE"]}},"required":["outcome"]},"then":{"properties":{"publish_authorized":{"const":false}}}}]}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict", "outcome", "blocking_findings", "warnings",
+    "required_checks_summary", "evidence_summary", "semantic_confirmed",
+    "apply_authorized", "policy_version"
+  ],
+  "properties": {
+    "verdict": {"enum": ["PASS", "FAIL", "INCOMPLETE", "ERROR"]},
+    "outcome": {"enum": [
+      "READY_TO_APPLY", "VALIDATED", "UNCHANGED_VALIDATED",
+      "UNCHANGED_BLOCKED", "REMEDIATION_REQUIRED", "INCOMPLETE", "ERROR",
+      "AUDIT_COMPLETE_VALID", "AUDIT_COMPLETE_FINDINGS",
+      "AUDIT_COMPLETE_BLOCKING_FINDINGS", "AUDIT_INCOMPLETE"
+    ]},
+    "blocking_findings": {"type": "array", "items": {"type": "string"}},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "required_checks_summary": {"type": "string", "minLength": 1},
+    "evidence_summary": {"type": "string", "minLength": 1},
+    "semantic_confirmed": {"type": "boolean"},
+    "apply_authorized": {"type": "boolean"},
+    "policy_version": {"type": "string", "minLength": 1},
+    "coverage_status": {"enum": ["FULL", "PARTIAL", "COMPATIBILITY"]},
+    "capability_preservation": {
+      "type": ["string", "null"],
+      "enum": ["CAPABILITY_PRESERVED", "CAPABILITY_REGRESSION", "AUTHORIZATION_REQUIRED", "CAPABILITY_UNVERIFIABLE", null]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"verdict": {"const": "PASS"}}, "required": ["verdict"]},
+      "then": {"properties": {"semantic_confirmed": {"const": true}}}
+    },
+    {
+      "if": {"properties": {"outcome": {"const": "READY_TO_APPLY"}}, "required": ["outcome"]},
+      "then": {"properties": {
+        "verdict": {"const": "PASS"},
+        "semantic_confirmed": {"const": true},
+        "apply_authorized": {"const": true}
+      }}
+    },
+    {
+      "if": {"properties": {"outcome": {"const": "AUDIT_COMPLETE_VALID"}}, "required": ["outcome"]},
+      "then": {"properties": {"coverage_status": {"const": "FULL"}}}
+    },
+    {
+      "if": {"properties": {"verdict": {"enum": ["FAIL", "INCOMPLETE", "ERROR"]}}, "required": ["verdict"]},
+      "then": {"properties": {"apply_authorized": {"const": false}}}
+    },
+    {
+      "if": {"properties": {"outcome": {"enum": [
+        "VALIDATED", "UNCHANGED_VALIDATED", "UNCHANGED_BLOCKED",
+        "REMEDIATION_REQUIRED", "INCOMPLETE", "ERROR",
+        "AUDIT_COMPLETE_VALID", "AUDIT_COMPLETE_FINDINGS",
+        "AUDIT_COMPLETE_BLOCKING_FINDINGS", "AUDIT_INCOMPLETE"
+      ]}}, "required": ["outcome"]},
+      "then": {"properties": {"apply_authorized": {"const": false}}}
+    }
+  ]
+}

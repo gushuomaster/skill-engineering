@@ -37,11 +37,11 @@ BASE_TRANSITIONS: dict[LifecycleState, frozenset[LifecycleState]] = {
         LifecycleState.AUDIT_INCOMPLETE,
     }),
     LifecycleState.VALIDATED: frozenset({LifecycleState.AUDITED, LifecycleState.GATE_PASSED, LifecycleState.GATE_FAILED}),
-    LifecycleState.GATE_PASSED: frozenset({LifecycleState.PUBLISHED, LifecycleState.UNCHANGED_VALIDATED}),
-    LifecycleState.READY_TO_PUBLISH: frozenset({
-        LifecycleState.PUBLISHED,
-        LifecycleState.PUBLISH_FAILED_RECOVERED,
-        LifecycleState.PUBLISH_FAILED_UNRECOVERABLE,
+    LifecycleState.GATE_PASSED: frozenset({LifecycleState.APPLIED, LifecycleState.UNCHANGED_VALIDATED}),
+    LifecycleState.READY_TO_APPLY: frozenset({
+        LifecycleState.APPLIED,
+        LifecycleState.APPLY_FAILED_RECOVERED,
+        LifecycleState.APPLY_FAILED_UNRECOVERABLE,
     }),
     LifecycleState.GATE_FAILED: frozenset({
         LifecycleState.CLASSIFIED,
@@ -65,7 +65,7 @@ def allowed_targets(state: LifecycleState, context: TransitionContext) -> frozen
 
     if read_only:
         targets.discard(LifecycleState.STAGED)
-        targets.discard(LifecycleState.PUBLISHED)
+        targets.discard(LifecycleState.APPLIED)
         if state is LifecycleState.GATE_PASSED:
             targets.intersection_update({LifecycleState.UNCHANGED_VALIDATED})
         if state is LifecycleState.GATE_FAILED:
@@ -132,7 +132,7 @@ def allowed_targets(state: LifecycleState, context: TransitionContext) -> frozen
     if state is LifecycleState.GATE_PASSED and (
         not context.authorized_to_modify or not context.staging_exists
     ):
-        targets.discard(LifecycleState.PUBLISHED)
+        targets.discard(LifecycleState.APPLIED)
     if state is LifecycleState.GATE_FAILED and (
         context.intent is not Intent.AUDIT_ONLY or context.authorized_to_modify
     ):

@@ -26,11 +26,11 @@ from engine.orchestrator import (
     EngineeringRequest,
     PipelineBlockedError,
     PipelineOrchestrator,
-    publish,
+    apply,
 )
 from engine.providers import AUDIT_SKILL, ProviderGateway
 from engine.rule_governance import GovernanceDecision
-from engine.workspace import PublishRecoveryError, SourceChangedError
+from engine.workspace import ApplyRecoveryError, SourceChangedError
 from scripts.skill_engineering import _command_runner
 from tests.support import ALL_MECHANISMS, codex_decision, confirmation, copy_candidate
 
@@ -67,7 +67,7 @@ def _modify_request(
     candidate: Path,
     target_parent: Path,
     *,
-    publish_requested: bool,
+    apply_requested: bool,
     records: list[CheckResult] | None = None,
     behavior_command: list[str] | None = None,
     regression_command: list[str] | None = None,
@@ -113,7 +113,7 @@ def _modify_request(
             _recorded_runner(regression_command, "B07", records)
             if include_regression else None
         ),
-        publish_requested=publish_requested,
+        apply_requested=apply_requested,
     )
 
 
@@ -121,7 +121,7 @@ def _create_request(
     candidate: Path,
     target_parent: Path,
     *,
-    publish_requested: bool,
+    apply_requested: bool,
     records: list[CheckResult] | None = None,
 ) -> EngineeringRequest:
     records = records if records is not None else []
@@ -144,7 +144,7 @@ def _create_request(
         semantic_confirmation=confirmation(candidate),
         behavioral_runner=_recorded_runner(behavior, "behavioral.create", records),
         regression_runner=_recorded_runner(regression, "B07", records),
-        publish_requested=publish_requested,
+        apply_requested=apply_requested,
     )
 
 
@@ -178,13 +178,13 @@ def test_m1_modify_without_publish_keeps_source_and_staged_candidate(tmp_path: P
     records: list[CheckResult] = []
 
     outcome = PipelineOrchestrator().run(
-        _modify_request(source, candidate, parent, publish_requested=False, records=records)
+        _modify_request(source, candidate, parent, apply_requested=False, records=records)
     )
 
     assert outcome.gate_result.verdict.value == "PASS"
     assert outcome.gate_result.semantic_confirmed is True
-    assert outcome.gate_result.publish_authorized is False
-    assert outcome.publication_session is None
+    assert outcome.gate_result.apply_authorized is False
+    assert outcome.apply_session is None
     assert digest_tree(source) == before
     assert digest_tree(outcome.artifact_path) == digest_tree(candidate)
     assert outcome.artifact_path.parent.name.startswith(".skill-engineering-")
@@ -204,42 +204,36 @@ def test_m2_modify_explicit_publish_records_atomic_replacement_and_backup(tmp_pa
     before = digest_tree(source)
     candidate_digest = digest_tree(candidate)
     outcome = PipelineOrchestrator().run(
-        _modify_request(source, candidate, parent, publish_requested=True)
+        _modify_request(source, candidate, parent, apply_requested=True)
     )
     assert outcome.gate_result.verdict.value == "PASS"
-    assert outcome.gate_result.publish_authorized is True
+    assert outcome.gate_result.apply_authorized is True
 
-    result = publish(outcome)
+    with pytest.raises(ValueError, match="formal completion receipt"):
+        apply(outcome)
 
-    assert result.status == "PUBLISHED"
-    assert result.source_digest_before == before
-    assert result.candidate_digest == candidate_digest
-    assert result.published_digest == candidate_digest == digest_tree(source)
-    assert result.backup_path == parent / "source-skill.backup"
-    assert result.backup_path is not None and digest_tree(result.backup_path) == before
-    assert result.workspace_diff == outcome.workspace_diff
-    assert not result.restored_after_failure
+    assert digest_tree(source) == before
+    assert digest_tree(outcome.artifact_path) == candidate_digest
+    assert not (parent / "source-skill.backup").exists()
     assert sentinel.read_text(encoding="utf-8") == "unchanged"
     assert {path.name for path in parent.iterdir() if path.is_dir()} == {
-        "source-skill",
-        "source-skill.backup",
-        outcome.artifact_path.parent.name,
+        "source-skill", outcome.artifact_path.parent.name,
     }
 
 
 def test_m3_source_digest_race_rejects_publish_without_overwrite(tmp_path: Path) -> None:
     parent, source, candidate = _modify_workspace(tmp_path)
     outcome = PipelineOrchestrator().run(
-        _modify_request(source, candidate, parent, publish_requested=True)
+        _modify_request(source, candidate, parent, apply_requested=True)
     )
     staged_digest = digest_tree(outcome.artifact_path)
     external = source / "external-change.txt"
     external.write_text("preserve me", encoding="utf-8")
-    assert outcome.publication_session is not None
-    assert digest_tree(source) != outcome.publication_session.source_digest
+    assert outcome.apply_session is not None
+    assert digest_tree(source) != outcome.apply_session.source_digest
 
-    with pytest.raises(SourceChangedError, match="after staging"):
-        publish(outcome)
+    with pytest.raises(ValueError, match="formal completion receipt"):
+        apply(outcome)
 
     assert external.read_text(encoding="utf-8") == "preserve me"
     assert digest_tree(outcome.artifact_path) == staged_digest
@@ -265,7 +259,7 @@ def test_m5_behavior_failure_preserves_command_streams_and_blocks_publish(tmp_pa
                 source,
                 candidate,
                 parent,
-                publish_requested=True,
+                apply_requested=True,
                 records=records,
                 behavior_command=failing,
             )
@@ -278,7 +272,7 @@ def test_m5_behavior_failure_preserves_command_streams_and_blocks_publish(tmp_pa
     assert behavior.evidence[2].startswith("stdout=actual=EXAMPLE")
     assert behavior.evidence[3] == "stderr="
     assert caught.value.gate_result.verdict.value == "FAIL"
-    assert caught.value.gate_result.publish_authorized is False
+    assert caught.value.gate_result.apply_authorized is False
     assert digest_tree(source) == before
     assert not (parent / "source-skill.backup").exists()
 
@@ -291,7 +285,7 @@ def test_m6_required_regression_absent_is_not_executed_and_blocks(tmp_path: Path
                 source,
                 candidate,
                 parent,
-                publish_requested=True,
+                apply_requested=True,
                 include_regression=False,
             )
         )
@@ -322,7 +316,7 @@ def test_m6_regression_launch_error_is_explicit_and_blocks(
                 source,
                 candidate,
                 parent,
-                publish_requested=True,
+                apply_requested=True,
                 records=records,
                 regression_command=actual_command,
             )
@@ -332,7 +326,7 @@ def test_m6_regression_launch_error_is_explicit_and_blocks(
     assert regression.status is CheckStatus.ERROR
     assert regression.evidence[1] == "exit_code=NOT_STARTED"
     assert expected_error in regression.evidence[3]
-    assert caught.value.gate_result.publish_authorized is False
+    assert caught.value.gate_result.apply_authorized is False
     assert not (parent / "source-skill.backup").exists()
 
 
@@ -342,7 +336,7 @@ def test_m7_injected_publish_failure_restores_original_and_records_recovery(
     parent, source, candidate = _modify_workspace(tmp_path)
     before = digest_tree(source)
     outcome = PipelineOrchestrator().run(
-        _modify_request(source, candidate, parent, publish_requested=True)
+        _modify_request(source, candidate, parent, apply_requested=True)
     )
     real_replace = os.replace
     calls: list[tuple[str, str]] = []
@@ -354,17 +348,11 @@ def test_m7_injected_publish_failure_restores_original_and_records_recovery(
         real_replace(src, dst)
 
     monkeypatch.setattr(workspace.os, "replace", fail_candidate_move)
-    with pytest.raises(PublishRecoveryError) as caught:
-        publish(outcome)
-
-    result = caught.value.result
-    assert result.status == "PUBLISH_FAILED_RECOVERED"
-    assert result.restored_after_failure is True
-    assert result.backup_path == parent / "source-skill.backup"
-    assert result.source_digest_before == before
-    assert result.candidate_digest == digest_tree(candidate)
-    assert result.published_digest == before == digest_tree(source)
-    assert not result.backup_path.exists()
+    with pytest.raises(ValueError, match="formal completion receipt"):
+        apply(outcome)
+    assert calls == []
+    assert digest_tree(source) == before
+    assert not (parent / "source-skill.backup").exists()
     assert outcome.artifact_path.exists()
 
 
@@ -375,12 +363,12 @@ def test_c1_create_without_publish_keeps_complete_candidate_in_staging(tmp_path:
     records: list[CheckResult] = []
 
     outcome = PipelineOrchestrator().run(
-        _create_request(candidate, destination, publish_requested=False, records=records)
+        _create_request(candidate, destination, apply_requested=False, records=records)
     )
 
     assert outcome.gate_result.verdict.value == "PASS"
-    assert outcome.gate_result.publish_authorized is False
-    assert outcome.publication_session is None
+    assert outcome.gate_result.apply_authorized is False
+    assert outcome.apply_session is None
     assert digest_tree(outcome.artifact_path) == digest_tree(candidate)
     assert outcome.artifact_path.name == "candidate-skill"
     assert not (destination / "candidate-skill").exists()
@@ -418,7 +406,7 @@ def test_c2_cli_create_explicit_publish_creates_exact_candidate(tmp_path: Path) 
             json.dumps(behavior),
             "--regression-command-json",
             json.dumps(regression),
-            "--publish",
+            "--apply",
             "--json",
         ],
         cwd=ROOT,
@@ -428,19 +416,10 @@ def test_c2_cli_create_explicit_publish_creates_exact_candidate(tmp_path: Path) 
         check=False,
     )
 
-    assert completed.returncode == 0, completed.stderr
+    assert completed.returncode == 1
     payload = json.loads(completed.stdout)
-    published = destination / "candidate-skill"
-    assert published.is_dir()
-    assert digest_tree(published) == digest_tree(candidate)
-    assert payload["gate_result"]["publish_authorized"] is True
-    assert payload["publication_result"]["status"] == "PUBLISHED"
-    assert payload["publication_result"]["backup_path"] is None
-    assert payload["publication_result"]["candidate_digest"] == digest_tree(candidate)
-    assert payload["publication_result"]["published_digest"] == digest_tree(candidate)
-    checks = {item["check_id"]: item for item in payload["evidence"]}
-    assert checks["behavioral.create"]["status"] == "PASS"
-    assert checks["B07"]["status"] == "PASS"
+    assert "formal completion receipt" in payload["error"]
+    assert not (destination / "candidate-skill").exists()
     assert not (destination / "staged-skill").exists()
 
 
@@ -458,15 +437,22 @@ def test_audit_only_rejects_publish_request_without_staging_or_backup(tmp_path: 
             False,
             source.parent,
             semantic_confirmation=confirmation(source),
-            publish_requested=True,
+            apply_requested=True,
+            behavioral_runner=_command_runner(
+                json.dumps([
+                    sys.executable, "scripts/check.py", "--value", " Example ",
+                    "--expect", "example",
+                ]),
+                "behavioral.audit",
+            ),
         )
     )
 
     assert outcome.gate_result.verdict.value == "PASS"
-    assert outcome.gate_result.publish_authorized is False
-    assert outcome.publication_session is None
-    with pytest.raises(ValueError, match="no publication-ready workspace"):
-        publish(outcome)
+    assert outcome.gate_result.apply_authorized is False
+    assert outcome.apply_session is None
+    with pytest.raises(ValueError, match="no validated safe-apply workspace"):
+        apply(outcome)
     assert digest_tree(source) == before
     assert not list(source.parent.glob(".skill-engineering-*"))
     assert not list(source.parent.glob("*.backup"))
@@ -492,7 +478,7 @@ def test_cli_audit_only_with_publish_flag_still_cannot_publish(tmp_path: Path) -
             str(SCRIPT),
             "Audit the source Skill",
             "--intent",
-            "AUDIT_ONLY",
+            "AUDIT",
             "--decision",
             str(decision_path),
             "--source",
@@ -503,7 +489,12 @@ def test_cli_audit_only_with_publish_flag_still_cannot_publish(tmp_path: Path) -
             before,
             "--semantic-rationale",
             "Codex verified the audited source",
-            "--publish",
+            "--behavior-command-json",
+            json.dumps([
+                sys.executable, "scripts/check.py", "--value", " Example ",
+                "--expect", "example",
+            ]),
+            "--apply",
             "--json",
         ],
         cwd=ROOT,
@@ -514,7 +505,7 @@ def test_cli_audit_only_with_publish_flag_still_cannot_publish(tmp_path: Path) -
     )
 
     assert completed.returncode == 1
-    assert "no publication-ready workspace" in json.loads(completed.stdout)["error"]
+    assert "no validated safe-apply workspace" in json.loads(completed.stdout)["error"]
     assert digest_tree(source) == before
     assert not list(source.parent.glob(".skill-engineering-*"))
     assert not list(source.parent.glob("*.backup"))
@@ -555,13 +546,13 @@ def test_missing_codex_semantic_confirmation_blocks_even_with_passing_provider(t
                 source,
                 candidate,
                 parent,
-                publish_requested=True,
+                apply_requested=True,
                 semantic=False,
             )
         )
 
     assert caught.value.gate_result.semantic_confirmed is False
-    assert caught.value.gate_result.publish_authorized is False
+    assert caught.value.gate_result.apply_authorized is False
     assert any(finding.startswith("B12") for finding in caught.value.gate_result.blocking_findings)
 
 
@@ -575,13 +566,13 @@ def test_missing_codex_governance_action_blocks_signal_without_heuristic_action(
     )
     with pytest.raises(ValueError, match="uninspected actionable findings"):
         PipelineOrchestrator().run(
-            _modify_request(source, candidate, parent, publish_requested=True)
+            _modify_request(source, candidate, parent, apply_requested=True)
         )
 
 
 def test_engine_rejects_non_codex_decision_and_missing_candidate(tmp_path: Path) -> None:
     parent, source, candidate = _modify_workspace(tmp_path)
-    request = _modify_request(source, candidate, parent, publish_requested=False)
+    request = _modify_request(source, candidate, parent, apply_requested=False)
     forged = replace(request.decision, decided_by="ENGINE")
     with pytest.raises(ValueError, match="authored by Codex"):
         PipelineOrchestrator().run(replace(request, decision=forged))
@@ -591,7 +582,7 @@ def test_engine_rejects_non_codex_decision_and_missing_candidate(tmp_path: Path)
 
 def test_engine_rejects_incomplete_mechanism_decision_without_inference(tmp_path: Path) -> None:
     parent, source, candidate = _modify_workspace(tmp_path)
-    request = _modify_request(source, candidate, parent, publish_requested=False)
+    request = _modify_request(source, candidate, parent, apply_requested=False)
     incomplete = replace(request.decision, rejected_mechanisms=())
     assert set(incomplete.selected_mechanisms) != set(ALL_MECHANISMS)
     with pytest.raises(ValueError, match="select or reject every known mechanism"):

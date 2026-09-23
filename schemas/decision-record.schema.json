@@ -1,1 +1,81 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"Codex-authored semantic decision","type":"object","additionalProperties":false,"required":["intent","primary_issue_class","control_gaps","regression_disposition","root_cause","evidence_limitations","selected_mechanisms","rejected_mechanisms","prompt_rule_justification","decided_by"],"properties":{"intent":{"enum":["CREATE","MODIFY","FIX","AUDIT_ONLY","AUDIT_OPTIMIZE"]},"primary_issue_class":{"enum":["IMPLEMENTATION_DEFECT","ENVIRONMENT_COMPATIBILITY","WORKFLOW_DESIGN_DEFECT","CONTRACT_ENFORCEMENT_GAP","CAPABILITY_INVARIANT_CHANGE","TASK_LOCAL_PREFERENCE","DOCUMENTATION_GAP","NO_DEFECT","INSUFFICIENT_EVIDENCE"]},"control_gaps":{"type":"array","items":{"enum":["IMPLEMENTATION_GAP","SCHEMA_MISSING","VALIDATOR_MISSING","ENV_DETECTION_MISSING","REGRESSION_MISSING","WORKFLOW_CONTROL_MISSING","INSTRUCTION_GAP","NONE"]}},"regression_disposition":{"enum":["REQUIRED","RECOMMENDED","NOT_APPLICABLE"]},"root_cause":{"type":["string","null"]},"evidence_limitations":{"type":"array","items":{"type":"string"}},"selected_mechanisms":{"type":"array","items":{"type":"string"}},"rejected_mechanisms":{"type":"array","items":{"type":"string"}},"prompt_rule_justification":{"type":["string","null"]},"decided_by":{"const":"CODEX"}},"allOf":[{"if":{"properties":{"intent":{"enum":["MODIFY","FIX","AUDIT_ONLY","AUDIT_OPTIMIZE"]},"primary_issue_class":{"enum":["IMPLEMENTATION_DEFECT","ENVIRONMENT_COMPATIBILITY","WORKFLOW_DESIGN_DEFECT","CONTRACT_ENFORCEMENT_GAP","DOCUMENTATION_GAP"]}},"required":["intent","primary_issue_class"]},"then":{"properties":{"root_cause":{"type":"string","minLength":1}}}}]}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Codex-authored semantic decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "intent", "primary_issue_class", "control_gaps", "regression_disposition",
+    "root_cause", "evidence_limitations", "selected_mechanisms",
+    "rejected_mechanisms", "prompt_rule_justification", "decided_by"
+  ],
+  "properties": {
+    "intent": {"enum": ["CREATE", "AUDIT", "AUDIT_REPAIR", "TARGETED_REPAIR"]},
+    "primary_issue_class": {"enum": ["IMPLEMENTATION_DEFECT", "ENVIRONMENT_COMPATIBILITY", "WORKFLOW_DESIGN_DEFECT", "CONTRACT_ENFORCEMENT_GAP", "CAPABILITY_INVARIANT_CHANGE", "TASK_LOCAL_PREFERENCE", "DOCUMENTATION_GAP", "NO_DEFECT", "INSUFFICIENT_EVIDENCE"]},
+    "control_gaps": {"type": "array", "items": {"enum": ["IMPLEMENTATION_GAP", "SCHEMA_MISSING", "VALIDATOR_MISSING", "ENV_DETECTION_MISSING", "REGRESSION_MISSING", "WORKFLOW_CONTROL_MISSING", "INSTRUCTION_GAP", "NONE"]}},
+    "regression_disposition": {"enum": ["REQUIRED", "RECOMMENDED", "NOT_APPLICABLE"]},
+    "root_cause": {"type": ["string", "null"]},
+    "evidence_limitations": {"type": "array", "items": {"type": "string"}},
+    "selected_mechanisms": {"type": "array", "items": {"type": "string"}},
+    "rejected_mechanisms": {"type": "array", "items": {"type": "string"}},
+    "prompt_rule_justification": {"type": ["string", "null"]},
+    "decided_by": {"const": "CODEX"},
+    "capability_change_decision": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/capabilityChangeDecision"}
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "intent": {"enum": ["AUDIT", "AUDIT_REPAIR", "TARGETED_REPAIR"]},
+          "primary_issue_class": {"enum": ["IMPLEMENTATION_DEFECT", "ENVIRONMENT_COMPATIBILITY", "WORKFLOW_DESIGN_DEFECT", "CONTRACT_ENFORCEMENT_GAP", "DOCUMENTATION_GAP"]}
+        },
+        "required": ["intent", "primary_issue_class"]
+      },
+      "then": {"properties": {"root_cause": {"type": "string", "minLength": 1}}}
+    }
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "stringArray": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "capabilityChangeDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseline_capability_digest", "candidate_capability_digest",
+        "capability_changes", "removed_capability_ids", "narrowed_capability_ids",
+        "change_rationale", "user_authorization_required",
+        "user_authorization_status", "authorization_evidence",
+        "compatibility_impact", "migration_plan", "deprecation_plan"
+      ],
+      "properties": {
+        "baseline_capability_digest": {"$ref": "#/$defs/digest"},
+        "candidate_capability_digest": {"$ref": "#/$defs/digest"},
+        "capability_changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["capability_id", "decision"],
+            "properties": {
+              "capability_id": {"type": "string", "minLength": 1},
+              "decision": {"enum": ["BUG_FIX", "IMPLEMENTATION_COMPLETION", "DECLARATION_CORRECTION", "CAPABILITY_REMOVAL", "CAPABILITY_NARROWING", "INTENTIONAL_BREAKING_CHANGE"]}
+            }
+          }
+        },
+        "removed_capability_ids": {"$ref": "#/$defs/stringArray"},
+        "narrowed_capability_ids": {"$ref": "#/$defs/stringArray"},
+        "change_rationale": {"type": "string", "minLength": 1},
+        "user_authorization_required": {"type": "boolean"},
+        "user_authorization_status": {"enum": ["NOT_REQUIRED", "REQUIRED", "AUTHORIZED", "DENIED", "MISSING"]},
+        "authorization_evidence": {"$ref": "#/$defs/stringArray"},
+        "compatibility_impact": {"type": "string", "minLength": 1},
+        "migration_plan": {"type": ["string", "null"]},
+        "deprecation_plan": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

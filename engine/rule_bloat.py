@@ -56,9 +56,10 @@ def _sources(skill_root: Path) -> list[Path]:
     if skill_file.is_file():
         paths.append(skill_file)
     for ancestor in (skill_root, *skill_root.parents):
-        candidate = ancestor / "AGENTS.md"
-        if candidate.is_file() and candidate not in paths:
-            paths.append(candidate)
+        for filename in ("AGENTS.md", "CLAUDE.md"):
+            candidate = ancestor / filename
+            if candidate.is_file() and candidate not in paths:
+                paths.append(candidate)
     references = skill_root / "references"
     if references.is_dir():
         for candidate in sorted(references.rglob("*.md")):
@@ -99,7 +100,7 @@ def extract_rule_units(skill_root: Path) -> tuple[RuleUnit, ...]:
             exception = exception_match.group(1).strip() if exception_match else None
             environment = _ENV.search(body)
             mechanism = _MECHANISM.search(body)
-            location = f"{path.name}:{line_number}"
+            location = f"{path.as_posix()}:{line_number}"
             units.append(RuleUnit(
                 id=f"rule-{len(units) + 1}", source_location=location,
                 normalized_meaning=normalized, modality=modality,
@@ -143,10 +144,10 @@ def detect_rule_bloat(units: tuple[RuleUnit, ...], history: RuleHistory | None) 
             )
         )
 
-    seen: dict[str, list[RuleUnit]] = {}
+    seen: dict[tuple[str, str], list[RuleUnit]] = {}
     for unit in units:
-        seen.setdefault(unit.normalized_meaning, []).append(unit)
-    for normalized, group in seen.items():
+        seen.setdefault((unit.normalized_meaning, unit.modality), []).append(unit)
+    for _identity, group in seen.items():
         if len(group) > 1:
             add(f"exact-{len(findings)+1}", tuple(u.id for u in group), ("exact_duplicate",), 1.0, "medium", "Rules have identical normalized meaning.")
     for index, left in enumerate(units):
