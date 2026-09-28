@@ -10,7 +10,7 @@
   "properties": {
     "provider_id": {"type": "string", "minLength": 1},
     "capability": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$"},
-    "provider_status": {"enum": ["AVAILABLE", "UNAVAILABLE", "INVALID_OUTPUT", "TIMEOUT", "INCOMPATIBLE", "DEGRADED"]},
+    "provider_status": {"type": "string", "enum": ["AVAILABLE", "UNAVAILABLE", "INVALID_OUTPUT", "TIMEOUT", "INCOMPATIBLE", "DEGRADED"]},
     "findings": {"type": "array", "items": {"type": "string"}},
     "candidate_changes": {"type": "array", "items": {"type": "string"}},
     "evidence": {"type": "array", "items": {"type": "string"}},
@@ -29,8 +29,87 @@
       ]
     }
   },
+  "anyOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_id", "capability", "provider_status", "findings",
+        "candidate_changes", "evidence", "limitations", "fallback_used",
+        "deliverable_contract", "capability_manifest"
+      ],
+      "properties": {
+        "provider_id": {"type": "string", "minLength": 1},
+        "capability": {"type": "string", "const": "CAPABILITY_CONTRACT"},
+        "provider_status": {"type": "string", "enum": ["AVAILABLE", "UNAVAILABLE", "INVALID_OUTPUT", "TIMEOUT", "INCOMPATIBLE", "DEGRADED"]},
+        "findings": {"type": "array", "items": {"type": "string"}},
+        "candidate_changes": {"type": "array", "items": {"type": "string"}},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "limitations": {"type": "array", "items": {"type": "string"}},
+        "fallback_used": {"type": "boolean"},
+        "deliverable_contract": {"type": "null"},
+        "capability_manifest": {
+          "anyOf": [
+            {"$ref": "#/$defs/capabilityManifest"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_id", "capability", "provider_status", "findings",
+        "candidate_changes", "evidence", "limitations", "fallback_used",
+        "deliverable_contract", "capability_manifest"
+      ],
+      "properties": {
+        "provider_id": {"type": "string", "minLength": 1},
+        "capability": {"type": "string", "const": "DELIVERABLE_CONTRACT"},
+        "provider_status": {"type": "string", "enum": ["AVAILABLE", "UNAVAILABLE", "INVALID_OUTPUT", "TIMEOUT", "INCOMPATIBLE", "DEGRADED"]},
+        "findings": {"type": "array", "items": {"type": "string"}},
+        "candidate_changes": {"type": "array", "items": {"type": "string"}},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "limitations": {"type": "array", "items": {"type": "string"}},
+        "fallback_used": {"type": "boolean"},
+        "deliverable_contract": {
+          "anyOf": [
+            {"$ref": "#/$defs/deliverableContract"},
+            {"type": "null"}
+          ]
+        },
+        "capability_manifest": {"type": "null"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_id", "capability", "provider_status", "findings",
+        "candidate_changes", "evidence", "limitations", "fallback_used",
+        "deliverable_contract", "capability_manifest"
+      ],
+      "properties": {
+        "provider_id": {"type": "string", "minLength": 1},
+        "capability": {
+          "type": "string",
+          "pattern": "^(?!(CAPABILITY_CONTRACT|DELIVERABLE_CONTRACT)$)[A-Za-z][A-Za-z0-9_.-]*$"
+        },
+        "provider_status": {"type": "string", "enum": ["AVAILABLE", "UNAVAILABLE", "INVALID_OUTPUT", "TIMEOUT", "INCOMPATIBLE", "DEGRADED"]},
+        "findings": {"type": "array", "items": {"type": "string"}},
+        "candidate_changes": {"type": "array", "items": {"type": "string"}},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "limitations": {"type": "array", "items": {"type": "string"}},
+        "fallback_used": {"type": "boolean"},
+        "deliverable_contract": {"type": "null"},
+        "capability_manifest": {"type": "null"}
+      }
+    }
+  ],
   "$defs": {
     "deliverableStatus": {
+      "type": "string",
       "enum": ["present", "missing", "unknown", "not_applicable"]
     },
     "deliverable": {
@@ -46,7 +125,7 @@
       ],
       "properties": {
         "deliverable_id": {"type": "string", "minLength": 1},
-        "declared_status": {"enum": ["implemented", "planned", "registered_only", "unknown"]},
+        "declared_status": {"type": "string", "enum": ["implemented", "planned", "registered_only", "unknown"]},
         "declarations": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "exposure_status": {"$ref": "#/$defs/deliverableStatus"},
         "exposure_entrypoint": {"type": ["string", "null"]},
@@ -82,10 +161,10 @@
           "type": "array",
           "items": {"$ref": "#/$defs/scopeConflict"}
         },
-        "applicability_status": {"enum": ["applicable", "not_applicable", "unknown"]},
+        "applicability_status": {"type": "string", "enum": ["applicable", "not_applicable", "unknown"]},
         "applicability_reason": {"type": "string", "minLength": 1},
         "applicability_evidence": {"type": "array", "items": {"type": "string"}},
-        "evidence_origin": {"enum": ["provider", "target_self_report"]}
+        "evidence_origin": {"type": "string", "enum": ["provider", "target_self_report"]}
       }
     },
     "scopeConflict": {
@@ -133,7 +212,7 @@
         "public_claim_sources": {"$ref": "#/$defs/stringArray"},
         "implementation_evidence": {"$ref": "#/$defs/stringArray"},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-        "evidence_state": {"enum": ["COMPLETE", "UNVERIFIABLE"]}
+        "evidence_state": {"type": "string", "enum": ["COMPLETE", "UNVERIFIABLE"]}
       }
     },
     "capabilityManifest": {
@@ -149,11 +228,11 @@
         "schema_version": {"type": "string", "const": "1.0"},
         "inspection_id": {"type": "string", "minLength": 1},
         "inspection_nonce": {"type": "string", "minLength": 1},
-        "artifact_role": {"enum": ["BASELINE", "CANDIDATE"]},
+        "artifact_role": {"type": "string", "enum": ["BASELINE", "CANDIDATE"]},
         "artifact_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "provider_identity": {"type": "string", "minLength": 1},
         "capabilities": {"type": "array", "items": {"$ref": "#/$defs/capability"}},
-        "public_output_contract_status": {"enum": ["present", "absent", "unknown"]},
+        "public_output_contract_status": {"type": "string", "enum": ["present", "absent", "unknown"]},
         "public_output_contract_evidence": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "evidence_origin": {"type": "string", "const": "provider"}
       }

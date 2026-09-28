@@ -49,7 +49,84 @@ def test_provider_result_rejects_malformed_deliverable_contract_digest() -> None
 def test_provider_result_schema_is_compatible_with_codex_structured_outputs() -> None:
     from engine.contracts import load_schema
 
-    assert "allOf" not in load_schema("provider-result")
+    schema = load_schema("provider-result")
+    assert "allOf" not in schema
+    required = set(schema["required"])
+    properties = set(schema["properties"])
+    for branch in schema["anyOf"]:
+        assert branch["type"] == "object"
+        assert branch["additionalProperties"] is False
+        assert set(branch["required"]) == required
+        assert set(branch["properties"]) == properties
+
+    def assert_typed_constraints(value: object) -> None:
+        if isinstance(value, dict):
+            if "enum" in value or "const" in value:
+                assert "type" in value
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            for child in value.values():
+                assert_typed_constraints(child)
+        elif isinstance(value, list):
+            for child in value:
+                assert_typed_constraints(child)
+
+    assert_typed_constraints(schema)
+
+
+def test_provider_schema_rejects_capability_provider_deliverable_contract() -> None:
+    payload = load_fixture("provider_result.json")
+    payload["provider_id"] = "bundled.capability-contract"
+    payload["capability"] = "CAPABILITY_CONTRACT"
+    payload["capability_manifest"] = {
+        "schema_version": "1.0",
+        "inspection_id": "inspection-1",
+        "inspection_nonce": "nonce-1",
+        "artifact_role": "BASELINE",
+        "artifact_digest": "a" * 64,
+        "provider_identity": "bundled.capability-contract",
+        "capabilities": [],
+        "public_output_contract_status": "absent",
+        "public_output_contract_evidence": ["file=SKILL.md;line=1"],
+        "evidence_origin": "provider",
+    }
+    payload["deliverable_contract"] = {
+        "schema_version": "1.0",
+        "inspection_id": "inspection-1",
+        "target_digest": "a" * 64,
+        "inspection_nonce": "nonce-1",
+        "provider_identity": "bundled.capability-contract",
+        "deliverables": [],
+        "scope_conflicts": [],
+        "applicability_status": "not_applicable",
+        "applicability_reason": "No deliverables are declared.",
+        "applicability_evidence": ["file=SKILL.md;line=1"],
+        "evidence_origin": "provider",
+    }
+
+    with pytest.raises(ValidationError):
+        validate_contract("provider-result", payload)
+
+
+def test_provider_schema_rejects_deliverable_provider_capability_manifest() -> None:
+    payload = load_fixture("provider_result.json")
+    payload["provider_id"] = "bundled.deliverable-contract"
+    payload["capability"] = "DELIVERABLE_CONTRACT"
+    payload["capability_manifest"] = {
+        "schema_version": "1.0",
+        "inspection_id": "inspection-1",
+        "inspection_nonce": "nonce-1",
+        "artifact_role": "BASELINE",
+        "artifact_digest": "a" * 64,
+        "provider_identity": "bundled.deliverable-contract",
+        "capabilities": [],
+        "public_output_contract_status": "absent",
+        "public_output_contract_evidence": ["file=SKILL.md;line=1"],
+        "evidence_origin": "provider",
+    }
+
+    with pytest.raises(ValidationError):
+        validate_contract("provider-result", payload)
 @pytest.mark.parametrize("fixture_name", ["gate_publish_with_fail.json", "gate_unchanged_authorized.json"])
 def test_gate_rejects_invalid_publication_authority(fixture_name: str) -> None:
     with pytest.raises(ValidationError): validate_contract("gate-result", load_fixture(fixture_name))

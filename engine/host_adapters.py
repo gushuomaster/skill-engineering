@@ -21,6 +21,7 @@ import yaml
 
 from engine.models import ProviderDescriptor, ProviderResult, ProviderStatus
 from engine.providers import normalize_provider_result
+from engine.skill_sources import LocalSkillSource
 
 
 CommandExecutor = Callable[..., subprocess.CompletedProcess[str]]
@@ -200,24 +201,16 @@ def discover_skill_path(
     roots: Sequence[Path] | None = None,
 ) -> Path:
     """Find an installed Skill by directory name without treating discovery as execution."""
-    if not skill_name or Path(skill_name).name != skill_name:
-        raise ValueError("skill name must be a single nonblank directory name")
     if roots is None:
         codex_root = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
         roots = (codex_root / "skills", codex_root / "plugins" / "cache")
-    candidates: list[Path] = []
-    for root in roots:
-        direct = (root / skill_name, root / ".system" / skill_name)
-        candidates.extend(path for path in direct if (path / "SKILL.md").is_file())
-        if root.is_dir():
-            candidates.extend(
-                item.parent for item in root.rglob("SKILL.md")
-                if item.parent.name == skill_name
-            )
-    unique = sorted({item.resolve() for item in candidates}, key=lambda item: str(item).lower())
-    if not unique:
+    candidate = LocalSkillSource(roots).find_exact(skill_name)
+    if candidate is None:
         raise FileNotFoundError(f"installed Skill not found: {skill_name}")
-    return unique[0]
+    fetch_reference = candidate.origins[0].fetch_reference
+    if fetch_reference is None:
+        raise FileNotFoundError(f"installed Skill has no local fetch reference: {skill_name}")
+    return Path(fetch_reference)
 
 
 def configured_provider(
@@ -296,14 +289,23 @@ class CodexSkillProviderAdapter:
         timing.snapshot_required_bytes = int(profile.get("required_bytes", 0))
         timing.snapshot_relevant_bytes = int(profile.get("relevant_bytes", 0))
         timing.snapshot_optional_bytes = int(profile.get("optional_bytes", 0))
-        timing.schema_bytes = self.schema_path.stat().st_size
         target_files = tuple(path for path in target.rglob("*") if path.is_file())
         timing.target_file_count = len(target_files)
         timing.target_bytes = sum(path.stat().st_size for path in target_files)
         self.last_timing = timing
         with tempfile.TemporaryDirectory(prefix="skill-provider-") as raw_temp:
             output = Path(raw_temp) / "provider-result.json"
-            command = self._command(target, output)
+            output_schema = Path(raw_temp) / "provider-output.schema.json"
+            output_schema.write_text(
+                json.dumps(
+                    self._structured_output_schema(capability, request=request),
+                    ensure_ascii=False,
+                    indent=2,
+                ) + "\n",
+                encoding="utf-8",
+            )
+            timing.schema_bytes = output_schema.stat().st_size
+            command = self._command(target, output, schema_path=output_schema)
             try:
                 if self._executor is subprocess.run:
                     completed = self._run_subprocess(command, prompt, timing, output)
@@ -484,7 +486,88 @@ class CodexSkillProviderAdapter:
                     process.kill()
                     process.wait()
 
-    def _command(self, target: Path, output: Path) -> list[str]:
+    def _structured_output_schema(
+        self,
+        capability: str,
+        *,
+        request: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        try:
+            canonical = json.loads(self.schema_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Provider result schema is unreadable: {exc}") from exc
+        branches = canonical.get("anyOf")
+        definitions = canonical.get("$defs")
+        if not isinstance(branches, list) or not isinstance(definitions, dict):
+            raise ValueError("Provider result schema lacks capability ownership branches")
+        selected = None
+        for branch in branches:
+            if not isinstance(branch, dict):
+                continue
+            properties = branch.get("properties")
+            capability_schema = (
+                properties.get("capability") if isinstance(properties, dict) else None
+            )
+            if not isinstance(capability_schema, dict):
+                continue
+            if capability_schema.get("const") == capability:
+                selected = branch
+                break
+            if "pattern" in capability_schema and capability not in {
+                "CAPABILITY_CONTRACT", "DELIVERABLE_CONTRACT",
+            }:
+                selected = branch
+        if selected is None:
+            raise ValueError(f"Provider result schema has no ownership branch for {capability}")
+        transport = json.loads(json.dumps(selected))
+        transport["$schema"] = canonical.get(
+            "$schema", "https://json-schema.org/draft/2020-12/schema"
+        )
+        transport["$defs"] = definitions
+        transport["properties"]["capability"] = {
+            "type": "string", "const": capability,
+        }
+        transport["properties"]["provider_id"] = {
+            "type": "string", "const": self.descriptor.provider_id,
+        }
+        request = request or {}
+        if capability == "CAPABILITY_CONTRACT":
+            bindings = {
+                "inspection_id": request.get("inspection_id"),
+                "inspection_nonce": request.get("inspection_nonce"),
+                "artifact_role": request.get("artifact_role"),
+                "artifact_digest": request.get("target_digest"),
+                "provider_identity": self.descriptor.provider_id,
+            }
+            contract_definition = transport["$defs"].get("capabilityManifest")
+        elif capability == "DELIVERABLE_CONTRACT":
+            bindings = {
+                "inspection_id": request.get("inspection_id"),
+                "inspection_nonce": request.get("inspection_nonce"),
+                "target_digest": request.get("target_digest"),
+                "provider_identity": self.descriptor.provider_id,
+            }
+            contract_definition = transport["$defs"].get("deliverableContract")
+        else:
+            bindings = {}
+            contract_definition = None
+        if isinstance(contract_definition, dict):
+            contract_properties = contract_definition.get("properties")
+            if isinstance(contract_properties, dict):
+                for field, value in bindings.items():
+                    if isinstance(value, str) and value:
+                        contract_properties[field] = {
+                            "type": "string", "const": value,
+                        }
+        return transport
+
+    def _command(
+        self,
+        target: Path,
+        output: Path,
+        *,
+        schema_path: Path | None = None,
+    ) -> list[str]:
         command = [
             self.executable, "exec", "--ephemeral", "--ignore-user-config",
             "--ignore-rules", "--sandbox", "read-only", "--skip-git-repo-check", "-C", str(target),
@@ -492,7 +575,7 @@ class CodexSkillProviderAdapter:
         for key, value in _codex_provider_config():
             command.extend(("-c", f"{key}={value}"))
         command.extend((
-            "--output-schema", str(self.schema_path),
+            "--output-schema", str(schema_path or self.schema_path),
             "--output-last-message", str(output), "-",
         ))
         return command
@@ -515,6 +598,15 @@ class CodexSkillProviderAdapter:
                 "and validation coverage. Use stable semantic IDs and UNVERIFIABLE when evidence "
                 "is insufficient."
             )
+            ownership = (
+                "Return capability_manifest as the only formal evidence payload and set "
+                "deliverable_contract to null. Bind capability_manifest exactly to "
+                f"inspection_id={request.get('inspection_id', '')}, "
+                f"inspection_nonce={request.get('inspection_nonce', '')}, "
+                f"artifact_role={request.get('artifact_role', '')}, "
+                f"artifact_digest={request.get('target_digest', '')}, and "
+                f"provider_identity={self.descriptor.provider_id}; evidence_origin must be provider."
+            )
         elif capability == "DELIVERABLE_CONTRACT":
             scope = (
                 "Extract and evidence the target's declared deliverables, exposure routes, "
@@ -522,10 +614,22 @@ class CodexSkillProviderAdapter:
                 "and applicability. Return a deliverable_contract when applicability is REQUIRED "
                 "or OPTIONAL."
             )
+            ownership = (
+                "Return deliverable_contract as the only formal evidence payload and set "
+                "capability_manifest to null. Bind deliverable_contract exactly to "
+                f"inspection_id={request.get('inspection_id', '')}, "
+                f"inspection_nonce={request.get('inspection_nonce', '')}, and "
+                f"target_digest={request.get('target_digest', '')}, and "
+                f"provider_identity={self.descriptor.provider_id}; evidence_origin must be provider."
+            )
         else:
             scope = (
                 "Evaluate only the Provider-owned structure, description/trigger, instruction-design, "
                 "and responsibility-boundary concerns."
+            )
+            ownership = (
+                "Set deliverable_contract and capability_manifest to null; this capability owns "
+                "neither formal evidence type."
             )
         provider_instructions = (self.skill_path / "SKILL.md").read_text(encoding="utf-8")
         target_snapshot, profile = _build_text_snapshot(
@@ -547,8 +651,7 @@ invoke or read any other Skill, plugin, or instruction file:
 --- End Target Text Evidence Snapshot ---
 {scope}
 The inspection mode is {request.get('mode', 'UNKNOWN')} and deliverable-contract applicability is {applicability}.
-If you return a deliverable_contract, bind it exactly to inspection_id={request.get('inspection_id', '')}, inspection_nonce={request.get('inspection_nonce', '')}, and target_digest={request.get('target_digest', '')}; evidence_origin must be provider.
-If you return a capability_manifest, bind it exactly to inspection_id={request.get('inspection_id', '')}, inspection_nonce={request.get('inspection_nonce', '')}, artifact_role={request.get('artifact_role', '')}, artifact_digest={request.get('target_digest', '')}, and provider_identity={self.descriptor.provider_id}; evidence_origin must be provider.
+{ownership}
 
 Return exactly one JSON object matching the supplied provider-result schema.
 - provider_id must be {self.descriptor.provider_id}

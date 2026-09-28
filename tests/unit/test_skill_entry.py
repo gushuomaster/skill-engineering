@@ -36,3 +36,12 @@ def test_every_reference_is_directly_linked_from_skill_md() -> None:
     body = read_skill()
     links = set(re.findall(r"\]\(references/([^)]*)\)", body))
     assert links == REFERENCE_NAMES
+
+
+def test_skill_routes_production_engine_calls_through_bootstrap() -> None:
+    body = read_skill()
+
+    assert "scripts/bootstrap_skill_engineering.py" in body
+    assert "Never invoke `scripts/skill_engineering.py` directly" in body
+    assert "BOOTSTRAP_ERROR" in body
+    assert "`INCOMPLETE`" in body

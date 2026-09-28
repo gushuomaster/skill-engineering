@@ -27,7 +27,9 @@ from engine.models import (
     StandardDependencyAssessment,
     StandardDependencyStatus, StandardSkillRequirement,
 )
-from engine.providers import CAPABILITIES, CAPABILITY_CONTRACT, ProviderGateway
+from engine.providers import (
+    CAPABILITIES, CAPABILITY_CONTRACT, DELIVERABLE_CONTRACT, ProviderGateway,
+)
 from engine.capability_diff import compare_capability_manifests
 from engine.capability_decisions import (
     capability_preservation_status,
@@ -603,6 +605,8 @@ class PipelineOrchestrator:
             executed_capabilities = internal_results + provider_results
             contract_checks: tuple[CheckResult, ...] = ()
             for provider in inspection.provider_evidence:
+                if provider.capability != DELIVERABLE_CONTRACT:
+                    continue
                 contract = provider.deliverable_contract
                 if contract is None:
                     continue

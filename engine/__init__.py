@@ -12,6 +12,15 @@ from .governance_api import (
     GovernanceStatus,
     ProviderObservation,
 )
+from .skill_sources import (
+    CandidateSignal,
+    LocalSkillSource,
+    SkillCandidate,
+    SkillOrigin,
+    SkillSource,
+    deduplicate_candidates,
+    search_sources,
+)
 
 __all__ = [
     "CapabilityDecision",
@@ -24,4 +33,11 @@ __all__ = [
     "GovernanceResult",
     "GovernanceStatus",
     "ProviderObservation",
+    "CandidateSignal",
+    "LocalSkillSource",
+    "SkillCandidate",
+    "SkillOrigin",
+    "SkillSource",
+    "deduplicate_candidates",
+    "search_sources",
 ]

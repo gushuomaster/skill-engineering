@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from engine.models import (
-    CheckResult, CheckStatus, CoverageStatus, DeliverableContract,
+    ArtifactRole, CapabilityManifest, CheckResult, CheckStatus, CoverageStatus, DeliverableContract,
     DeliverableContractApplicability, DeliverableEvidence,
     DeliverableEvidenceStatus, GateOutcome, GateVerdict, Intent, LifecycleState,
     ProviderDescriptor, ProviderResult, ProviderStatus,
 )
+from engine.managed_completion import completion_receipt
 from engine.orchestrator import PipelineOrchestrator
-from engine.providers import ProviderGateway
+from engine.providers import CAPABILITY_CONTRACT, ProviderGateway
 from tests.support import codex_decision, confirmation, copy_candidate
 
 
@@ -59,6 +61,31 @@ class SelectedButFailedProvider:
 
     def invoke(self, capability: str, request: dict[str, object]) -> ProviderResult:
         raise RuntimeError("selected Provider failed before returning a contract")
+
+
+class CapabilityProvider:
+    descriptor = ProviderDescriptor(
+        "bundled.capability-contract", "test://capability.contract", "1",
+        CAPABILITY_CONTRACT, ProviderStatus.AVAILABLE, "test", (), None,
+    )
+
+    def invoke(self, capability: str, request: dict[str, object]) -> ProviderResult:
+        manifest = CapabilityManifest(
+            "1.0",
+            str(request["inspection_id"]),
+            str(request["inspection_nonce"]),
+            ArtifactRole(str(request["artifact_role"])),
+            str(request["target_digest"]),
+            self.descriptor.provider_id,
+            (),
+            "present",
+            ("file=SKILL.md",),
+        )
+        return ProviderResult(
+            self.descriptor.provider_id, capability, ProviderStatus.AVAILABLE,
+            (), (), ("capability provider executed",), (), False,
+            capability_manifest=manifest,
+        )
 
 
 def _deliverable(
@@ -207,6 +234,90 @@ def test_required_valid_contract_has_full_coverage_and_allows_apply(tmp_path: Pa
     assert validation.coverage_status is CoverageStatus.FULL
     assert outcome.gate_result.verdict is GateVerdict.PASS
     assert outcome.gate_result.apply_authorized is True
+
+
+def test_dual_bundled_providers_have_single_evidence_owners_and_formal_lifecycle(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path / "demo")
+    orchestrator = PipelineOrchestrator(
+        provider_gateway=ProviderGateway((CapabilityProvider(), ContractProvider())),
+    )
+
+    inspection = orchestrator.inspect(
+        Intent.AUDIT, source,
+        deliverable_contract_applicability=DeliverableContractApplicability.REQUIRED,
+    )
+    validation = orchestrator.validate(
+        inspection, codex_decision(Intent.AUDIT), (), candidate=None,
+        target_parent=source.parent, authorized_to_modify=False,
+        behavioral_runner=_behavior,
+    )
+    outcome = orchestrator.confirm(validation, confirmation(source))
+    receipt = completion_receipt(outcome)
+
+    executed = {
+        item.capability: item
+        for item in inspection.provider_evidence
+        if item.provider_execution.value == "EXECUTED"
+    }
+    assert set(executed) == {"CAPABILITY_CONTRACT", "DELIVERABLE_CONTRACT"}
+    assert executed["CAPABILITY_CONTRACT"].capability_manifest is not None
+    assert executed["CAPABILITY_CONTRACT"].deliverable_contract is None
+    assert executed["DELIVERABLE_CONTRACT"].deliverable_contract is not None
+    assert executed["DELIVERABLE_CONTRACT"].capability_manifest is None
+    assert sum(
+        item.check_id == "capability.deliverable_contract"
+        for item in validation.deterministic_evidence
+    ) == 1
+    assert validation.coverage_status is CoverageStatus.FULL
+    assert outcome.gate_result.verdict is GateVerdict.PASS
+    assert receipt.inspection_id == inspection.inspection_id
+    assert receipt.formal_completion is True
+
+
+def test_deliverable_routing_ignores_non_owner_contract_before_evidence_collection(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path / "demo")
+    orchestrator = PipelineOrchestrator(
+        provider_gateway=ProviderGateway((CapabilityProvider(), ContractProvider())),
+    )
+    inspection = orchestrator.inspect(
+        Intent.AUDIT, source,
+        deliverable_contract_applicability=DeliverableContractApplicability.REQUIRED,
+    )
+    capability_record = next(
+        item for item in inspection.provider_evidence
+        if item.capability == CAPABILITY_CONTRACT
+    )
+    rogue_contract = DeliverableContract(
+        "1.0", inspection.inspection_id, str(inspection.baseline_digest),
+        inspection.inspection_nonce, capability_record.provider_id, (), (),
+        "not_applicable", "Non-owner contract must never be routed.",
+        ("file=SKILL.md",), "provider",
+    )
+    injected = replace(
+        inspection,
+        provider_evidence=tuple(
+            replace(item, deliverable_contract=rogue_contract)
+            if item.capability == CAPABILITY_CONTRACT else item
+            for item in inspection.provider_evidence
+        ),
+    )
+
+    validation = orchestrator.validate(
+        injected, codex_decision(Intent.AUDIT), (), candidate=None,
+        target_parent=source.parent, authorized_to_modify=False,
+        behavioral_runner=_behavior,
+    )
+
+    checks = tuple(
+        item for item in validation.deterministic_evidence
+        if item.check_id == "capability.deliverable_contract"
+    )
+    assert len(checks) == 1
+    assert checks[0].source == "internal.deliverable-contract"
 
 
 def test_required_stale_contract_is_not_full_and_blocks(tmp_path: Path) -> None:

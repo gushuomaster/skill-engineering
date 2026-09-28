@@ -9,6 +9,12 @@ Use this Skill when the user asks to audit a Skill, audit and repair it, or repa
 
 Do not use this Skill for Marketplace publishing, Plugin release, distribution, installation, deployment, or release management.
 
+## Engine entrypoint
+
+Run every production Engine command through `scripts/bootstrap_skill_engineering.py`, resolved from this installed plugin's root. The bootstrap uses only the Python standard library, provisions the locked runtime with uv outside the plugin and target workspace, and then launches `scripts/skill_engineering.py` inside that managed runtime. Never invoke `scripts/skill_engineering.py` directly with the current system Python.
+
+If bootstrap returns `BOOTSTRAP_ERROR`, do not fabricate an inspection, Gate, or receipt. Report the structured reason and treat the managed workflow as `INCOMPLETE` under the result boundary below.
+
 ## Choose one user mode
 
 - `AUDIT`: inspect the complete baseline, run executable checks only in an Engine-owned disposable snapshot, report RCA/findings/evidence, and prove the source tree did not change.

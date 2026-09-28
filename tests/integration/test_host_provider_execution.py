@@ -281,7 +281,9 @@ def test_structured_output_completion_does_not_wait_for_child_cleanup(
     adapter = _installed_adapter(tmp_path, RecordingCodexExecutor())
     adapter._executor = subprocess.run
     adapter.executable = sys.executable
-    adapter._command = lambda target, output: [sys.executable, str(script), str(output)]
+    adapter._command = lambda target, output, **_: [
+        sys.executable, str(script), str(output)
+    ]
 
     with pytest.raises(ValueError, match="execution markers"):
         adapter.invoke("CREATE_CANDIDATE", {"target_path": str(tmp_path)})

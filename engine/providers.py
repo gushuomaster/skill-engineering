@@ -25,9 +25,10 @@ AUDIT_SKILL = "AUDIT_SKILL"
 GOVERN_AGENT_INSTRUCTIONS = "GOVERN_AGENT_INSTRUCTIONS"
 CHECK_SKILL_CONFORMANCE = "CHECK_SKILL_CONFORMANCE"
 CAPABILITY_CONTRACT = "CAPABILITY_CONTRACT"
+DELIVERABLE_CONTRACT = "DELIVERABLE_CONTRACT"
 CAPABILITIES = frozenset(
     {CREATE_CANDIDATE, AUDIT_SKILL, GOVERN_AGENT_INSTRUCTIONS, CHECK_SKILL_CONFORMANCE,
-     CAPABILITY_CONTRACT, "DELIVERABLE_CONTRACT"}
+     CAPABILITY_CONTRACT, DELIVERABLE_CONTRACT}
 )
 
 _FAILURE_STATUSES = frozenset(
@@ -72,6 +73,36 @@ def normalize_provider_result(
     evidence_valid = bool(payload.pop("evidence_valid", False))
     contract_payload = payload.pop("deliverable_contract", None)
     manifest_payload = payload.pop("capability_manifest", None)
+    requested_capability = capability or str(payload.get("capability", ""))
+    if requested_capability == CAPABILITY_CONTRACT and contract_payload is not None:
+        raise ValueError(
+            "CAPABILITY_CONTRACT provider cannot return deliverable_contract"
+        )
+    if requested_capability == DELIVERABLE_CONTRACT and manifest_payload is not None:
+        raise ValueError(
+            "DELIVERABLE_CONTRACT provider cannot return capability_manifest"
+        )
+    if requested_capability not in {CAPABILITY_CONTRACT, DELIVERABLE_CONTRACT} and (
+        contract_payload is not None or manifest_payload is not None
+    ):
+        raise ValueError(
+            f"{requested_capability or 'unknown'} provider cannot return formal contract evidence"
+        )
+    for evidence_name, evidence_payload in (
+        ("deliverable_contract", contract_payload),
+        ("capability_manifest", manifest_payload),
+    ):
+        if evidence_payload is None:
+            continue
+        if not isinstance(evidence_payload, Mapping):
+            raise ValueError(f"{evidence_name} must be an object")
+        if (
+            provider_id is not None
+            and evidence_payload.get("provider_identity") != provider_id
+        ):
+            raise ValueError(
+                f"{evidence_name} provider_identity does not match descriptor"
+            )
     for field in ("findings", "candidate_changes", "evidence", "limitations"):
         if field in payload and isinstance(payload[field], list):
             payload[field] = tuple(payload[field])
@@ -90,13 +121,9 @@ def normalize_provider_result(
         raise ValueError(f"invalid provider result: {exc}") from exc
     contract = None
     if contract_payload is not None:
-        if not isinstance(contract_payload, Mapping):
-            raise ValueError("deliverable_contract must be an object")
         contract = deliverable_contract_from_data(contract_payload)
     manifest = None
     if manifest_payload is not None:
-        if not isinstance(manifest_payload, Mapping):
-            raise ValueError("capability_manifest must be an object")
         manifest = capability_manifest_from_data(manifest_payload)
     return ProviderResult(
         provider_id=str(payload["provider_id"]),
@@ -362,6 +389,7 @@ class ProviderGateway:
 __all__ = [
     "AUDIT_SKILL",
     "CAPABILITY_CONTRACT",
+    "DELIVERABLE_CONTRACT",
     "CAPABILITIES",
     "CHECK_SKILL_CONFORMANCE",
     "CREATE_CANDIDATE",
