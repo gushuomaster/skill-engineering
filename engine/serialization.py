@@ -320,7 +320,7 @@ def inspection_from_data(payload: dict[str, Any]) -> InspectionBundle:
 def validation_from_data(payload: dict[str, Any]) -> ValidationBundle:
     validate_contract("validation-bundle", payload)
     gate_payload = payload.get("gate_result")
-    gate = _gate(gate_payload) if gate_payload else None
+    gate = gate_from_data(gate_payload) if gate_payload else None
     deliverable_payload = payload.get("deliverable_contract_provenance")
     applicability = DeliverableContractApplicability(
         deliverable_payload.get("applicability", "COMPATIBILITY")
@@ -376,7 +376,7 @@ def validation_from_data(payload: dict[str, Any]) -> ValidationBundle:
     )
 
 
-def _gate(payload: dict[str, Any]) -> GateResult:
+def gate_from_data(payload: dict[str, Any]) -> GateResult:
     return GateResult(
         GateVerdict(payload["verdict"]), GateOutcome(payload["outcome"]),
         tuple(payload["blocking_findings"]), tuple(payload["warnings"]),

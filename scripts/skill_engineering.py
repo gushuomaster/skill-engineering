@@ -16,12 +16,22 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from engine.contracts import validate_contract
-from engine.candidate_resolution import OpenSpaceCliResolver, default_artifact_root
+from engine.candidate_governance import (
+    CandidateChangedError,
+    finalize_candidate,
+    incomplete_candidate_result,
+)
+from engine.candidate_resolution import (
+    CandidateResolutionError,
+    OpenSpaceCliResolver,
+    default_artifact_root,
+)
 from engine.discovery import DiscoveryService, record_selection
 from engine.discovery_config import build_sources, load_source_config
-from engine.discovery_models import ImmutabilityStatus
+from engine.discovery_models import CandidateGovernanceStatus, ImmutabilityStatus
 from engine.discovery_serialization import (
     discovery_bundle_from_data,
+    resolved_candidate_from_data,
     selection_record_from_data,
 )
 from engine.models import (
@@ -43,7 +53,8 @@ from engine.providers import ProviderGateway
 from engine.serialization import (
     completion_receipt_from_data, confirmation_from_data, decision_from_data,
     governance_from_data,
-    inspection_from_data, outcome_to_data, to_data, validation_from_data,
+    gate_from_data, inspection_from_data, outcome_to_data, to_data,
+    validation_from_data,
 )
 
 
@@ -91,6 +102,16 @@ def _phase_parser() -> argparse.ArgumentParser:
         default=ROOT / "config" / "skill-sources.yaml",
     )
     resolve.add_argument("--output", required=True, type=Path)
+    resolve.add_argument("--failure-output", type=Path)
+
+    finalize = commands.add_parser("finalize-candidate")
+    finalize.add_argument("--resolved-candidate", required=True, type=Path)
+    finalize.add_argument("--selection-record", required=True, type=Path)
+    finalize.add_argument("--inspection", required=True, type=Path)
+    finalize.add_argument("--gate-result", required=True, type=Path)
+    finalize.add_argument("--managed-receipt", type=Path)
+    finalize.add_argument("--output", required=True, type=Path)
+    finalize.add_argument("--receipt-output", type=Path)
 
     inspect = commands.add_parser("inspect")
     inspect.add_argument("--target", type=Path)
@@ -185,9 +206,17 @@ def _read_json(path: Path) -> object:
 
 
 def _write_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+
+
+def _plugin_version() -> str:
+    payload = _read_json(ROOT / ".codex-plugin" / "plugin.json")
+    if not isinstance(payload, dict) or not isinstance(payload.get("version"), str):
+        raise ValueError("plugin manifest requires a version")
+    return payload["version"]
 
 
 def _json_string_array(raw: str | None, label: str) -> tuple[str, ...] | None:
@@ -317,16 +346,32 @@ def _phase_main(argv: list[str]) -> int:
                 ROOT / "skills",
                 *args.forbidden_root,
             )
-            resolved = OpenSpaceCliResolver(download_command).resolve(
-                matches[0],
-                selection,
-                artifact_root=(
-                    args.artifact_root
-                    if args.artifact_root is not None
-                    else default_artifact_root(args.project_id)
-                ),
-                forbidden_roots=forbidden_roots,
-            )
+            try:
+                resolved = OpenSpaceCliResolver(download_command).resolve(
+                    matches[0],
+                    selection,
+                    artifact_root=(
+                        args.artifact_root
+                        if args.artifact_root is not None
+                        else default_artifact_root(args.project_id)
+                    ),
+                    forbidden_roots=forbidden_roots,
+                )
+            except (CandidateResolutionError, PermissionError) as exc:
+                if args.failure_output is None:
+                    raise
+                failure = incomplete_candidate_result(
+                    matches[0].candidate_id,
+                    (str(exc),),
+                    candidate_digest=None,
+                    discovery_bundle_digest=selection.discovery_bundle_digest,
+                    selection_record_digest=selection.selection_record_digest,
+                    clock=lambda: datetime.now(timezone.utc),
+                )
+                failure_payload = to_data(failure)
+                validate_contract("candidate-governance-result", failure_payload)
+                _write_json(args.failure_output, failure_payload)
+                return 2
             payload = to_data(resolved)
             validate_contract("resolved-candidate", payload)
             _write_json(args.output, payload)
@@ -335,6 +380,54 @@ def _phase_main(argv: list[str]) -> int:
                 if resolved.immutability_status is ImmutabilityStatus.PROVEN
                 else 2
             )
+        if args.command == "finalize-candidate":
+            resolved = resolved_candidate_from_data(
+                _read_json(args.resolved_candidate)
+            )
+            selection = selection_record_from_data(_read_json(args.selection_record))
+            inspection = inspection_from_data(_read_json(args.inspection))
+            gate_payload = _read_json(args.gate_result)
+            validate_contract("gate-result", gate_payload)
+            gate = gate_from_data(gate_payload)
+            receipt = (
+                completion_receipt_from_data(_read_json(args.managed_receipt))
+                if args.managed_receipt is not None
+                else None
+            )
+            try:
+                result = finalize_candidate(
+                    resolved,
+                    selection,
+                    inspection,
+                    gate,
+                    receipt,
+                    plugin_version=_plugin_version(),
+                    clock=lambda: datetime.now(timezone.utc),
+                )
+            except CandidateChangedError as exc:
+                result = incomplete_candidate_result(
+                    resolved.candidate_id,
+                    (str(exc),),
+                    candidate_digest=resolved.candidate_digest,
+                    discovery_bundle_digest=resolved.discovery_bundle_digest,
+                    selection_record_digest=resolved.selection_record_digest,
+                    clock=lambda: datetime.now(timezone.utc),
+                )
+            payload = to_data(result)
+            validate_contract("candidate-governance-result", payload)
+            _write_json(args.output, payload)
+            if (
+                result.governance_status is CandidateGovernanceStatus.APPROVED
+                and args.receipt_output is not None
+            ):
+                receipt_payload = to_data(result.receipt)
+                validate_contract("candidate-governance-receipt", receipt_payload)
+                _write_json(args.receipt_output, receipt_payload)
+            return {
+                CandidateGovernanceStatus.APPROVED: 0,
+                CandidateGovernanceStatus.BLOCKED: 1,
+                CandidateGovernanceStatus.INCOMPLETE: 2,
+            }[result.governance_status]
         if args.command == "inspect":
             provider_specs = tuple(
                 (value.split("=", 1) + [None])[:2]
