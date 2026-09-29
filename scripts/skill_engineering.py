@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hmac
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -15,9 +16,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from engine.contracts import validate_contract
+from engine.candidate_resolution import OpenSpaceCliResolver, default_artifact_root
 from engine.discovery import DiscoveryService, record_selection
 from engine.discovery_config import build_sources, load_source_config
-from engine.discovery_serialization import discovery_bundle_from_data
+from engine.discovery_models import ImmutabilityStatus
+from engine.discovery_serialization import (
+    discovery_bundle_from_data,
+    selection_record_from_data,
+)
 from engine.models import (
     CheckResult, CheckStatus, DeliverableContractApplicability, Intent,
     LifecycleState, ManagedOperationStatus, ManagedStatusResult,
@@ -72,6 +78,19 @@ def _phase_parser() -> argparse.ArgumentParser:
     selection.add_argument("--candidate-id", required=True)
     selection.add_argument("--rationale", required=True)
     selection.add_argument("--output", required=True, type=Path)
+
+    resolve = commands.add_parser("resolve-candidate")
+    resolve.add_argument("--discovery-bundle", required=True, type=Path)
+    resolve.add_argument("--selection-record", required=True, type=Path)
+    resolve.add_argument("--artifact-root", type=Path)
+    resolve.add_argument("--project-id", required=True)
+    resolve.add_argument("--download-command-json")
+    resolve.add_argument("--forbidden-root", action="append", type=Path, default=[])
+    resolve.add_argument(
+        "--source-config", type=Path,
+        default=ROOT / "config" / "skill-sources.yaml",
+    )
+    resolve.add_argument("--output", required=True, type=Path)
 
     inspect = commands.add_parser("inspect")
     inspect.add_argument("--target", type=Path)
@@ -269,6 +288,53 @@ def _phase_main(argv: list[str]) -> int:
             validate_contract("selection-record", payload)
             _write_json(args.output, payload)
             return 0
+        if args.command == "resolve-candidate":
+            bundle = discovery_bundle_from_data(_read_json(args.discovery_bundle))
+            selection = selection_record_from_data(_read_json(args.selection_record))
+            if not hmac.compare_digest(
+                selection.discovery_bundle_digest,
+                bundle.bundle_digest,
+            ):
+                raise ValueError("selection references a different discovery bundle")
+            matches = tuple(
+                item for item in bundle.candidates
+                if item.candidate_id == selection.selected_candidate_id
+            )
+            if len(matches) != 1:
+                raise ValueError("selection must reference exactly one bundle candidate")
+            config = load_source_config(args.source_config)
+            configured_download = config.by_type("openspace-cloud").download_command
+            download_command = _json_string_array(
+                args.download_command_json,
+                "OpenSpace download command",
+            ) or configured_download
+            codex_home = Path(
+                os.environ.get("CODEX_HOME", Path.home() / ".codex")
+            )
+            forbidden_roots = (
+                codex_home / "skills",
+                codex_home / "plugins" / "cache",
+                ROOT / "skills",
+                *args.forbidden_root,
+            )
+            resolved = OpenSpaceCliResolver(download_command).resolve(
+                matches[0],
+                selection,
+                artifact_root=(
+                    args.artifact_root
+                    if args.artifact_root is not None
+                    else default_artifact_root(args.project_id)
+                ),
+                forbidden_roots=forbidden_roots,
+            )
+            payload = to_data(resolved)
+            validate_contract("resolved-candidate", payload)
+            _write_json(args.output, payload)
+            return (
+                0
+                if resolved.immutability_status is ImmutabilityStatus.PROVEN
+                else 2
+            )
         if args.command == "inspect":
             provider_specs = tuple(
                 (value.split("=", 1) + [None])[:2]

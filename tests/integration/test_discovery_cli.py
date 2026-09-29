@@ -8,12 +8,16 @@ from pathlib import Path
 
 from engine.discovery_serialization import (
     discovery_bundle_from_data,
+    resolved_candidate_from_data,
     selection_record_from_data,
 )
 from tests.integration.test_cli import ROOT, SCRIPT
 
 
 FAKE_MCP = ROOT / "tests" / "fixtures" / "openspace" / "fake_mcp_server.py"
+FAKE_DOWNLOADER = (
+    ROOT / "tests" / "fixtures" / "openspace" / "fake_download_skill.py"
+)
 
 
 def run_cli(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -100,3 +104,49 @@ def test_record_selection_requires_current_bundle_digest(tmp_path: Path) -> None
     record = selection_record_from_data(json.loads(output.read_text(encoding="utf-8")))
     assert record.discovery_bundle_digest == bundle.bundle_digest
     assert record.selection_rationale == "Best match for the requested workflow."
+
+
+def test_resolve_candidate_writes_quarantine_record_without_installing(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex-home"
+    installed = codex_home / "skills"
+    installed.mkdir(parents=True)
+    discovery_path = tmp_path / "discovery.json"
+    assert run_cli(
+        "discover",
+        "--query", "demo",
+        "--source", "openspace-cloud",
+        "--openspace-mcp-command-json", json.dumps([sys.executable, str(FAKE_MCP)]),
+        "--output", str(discovery_path),
+        env={"CODEX_HOME": str(codex_home)},
+    ).returncode == 0
+    bundle = discovery_bundle_from_data(
+        json.loads(discovery_path.read_text(encoding="utf-8"))
+    )
+    selection_path = tmp_path / "selection.json"
+    assert run_cli(
+        "record-selection",
+        "--discovery-bundle", str(discovery_path),
+        "--expected-bundle-digest", bundle.bundle_digest,
+        "--candidate-id", bundle.candidates[0].candidate_id,
+        "--rationale", "Best remote match.",
+        "--output", str(selection_path),
+    ).returncode == 0
+    output = tmp_path / "resolved.json"
+
+    result = run_cli(
+        "resolve-candidate",
+        "--discovery-bundle", str(discovery_path),
+        "--selection-record", str(selection_path),
+        "--project-id", "cli-test",
+        "--artifact-root", str(tmp_path / "artifacts"),
+        "--download-command-json", json.dumps([sys.executable, str(FAKE_DOWNLOADER)]),
+        "--output", str(output),
+        env={"CODEX_HOME": str(codex_home)},
+    )
+
+    assert result.returncode == 2, result.stderr
+    resolved = resolved_candidate_from_data(
+        json.loads(output.read_text(encoding="utf-8"))
+    )
+    assert resolved.quarantine_path.is_relative_to((tmp_path / "artifacts").resolve())
+    assert not tuple(installed.iterdir())
