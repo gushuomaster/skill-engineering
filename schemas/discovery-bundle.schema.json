@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "discovery_id", "query", "source_reports", "candidates", "discovered_at", "bundle_digest"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "discovery_id": {"type": "string", "minLength": 1},
+    "query": {"type": "string", "minLength": 1},
+    "source_reports": {"type": "array", "items": {"$ref": "#/$defs/sourceReport"}},
+    "candidates": {"type": "array", "items": {"$ref": "#/$defs/candidate"}},
+    "discovered_at": {"type": "string", "minLength": 1},
+    "bundle_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "nullableString": {"type": ["string", "null"]},
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "value": {"type": "string"}
+      }
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_type", "source_id", "source_url", "fetch_reference", "publisher", "version", "revision", "trust_signals", "popularity_signals", "quality_signals"],
+      "properties": {
+        "source_type": {"type": "string", "minLength": 1},
+        "source_id": {"type": "string", "minLength": 1},
+        "source_url": {"$ref": "#/$defs/nullableString"},
+        "fetch_reference": {"$ref": "#/$defs/nullableString"},
+        "publisher": {"$ref": "#/$defs/nullableString"},
+        "version": {"$ref": "#/$defs/nullableString"},
+        "revision": {"$ref": "#/$defs/nullableString"},
+        "trust_signals": {"type": "array", "items": {"$ref": "#/$defs/signal"}},
+        "popularity_signals": {"type": "array", "items": {"$ref": "#/$defs/signal"}},
+        "quality_signals": {"type": "array", "items": {"$ref": "#/$defs/signal"}}
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_id", "name", "description", "canonical_repository", "content_digest", "origins", "discovered_at"],
+      "properties": {
+        "candidate_id": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "description": {"type": "string"},
+        "canonical_repository": {"$ref": "#/$defs/nullableString"},
+        "content_digest": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "origins": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/origin"}},
+        "discovered_at": {"type": "string", "minLength": 1}
+      }
+    },
+    "sourceReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_type", "status", "candidate_ids", "errors"],
+      "properties": {
+        "source_type": {"type": "string", "minLength": 1},
+        "status": {"enum": ["COMPLETE", "INCOMPLETE"]},
+        "candidate_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "errors": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    }
+  }
+}

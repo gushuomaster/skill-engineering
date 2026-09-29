@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "receipt_id", "governance_status", "candidate_id", "source_type", "source_id", "source_uri", "resolved_revision", "candidate_digest", "resolution_record_digest", "discovery_bundle_digest", "selection_id", "selection_rationale", "selection_record_digest", "inspection_id", "coverage_status", "gate_verdict", "managed_completion_receipt_digest", "engine_version", "plugin_version", "issued_at", "receipt_digest"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "receipt_id": {"type": "string", "minLength": 1},
+    "governance_status": {"const": "APPROVED"},
+    "candidate_id": {"type": "string", "minLength": 1},
+    "source_type": {"type": "string", "minLength": 1},
+    "source_id": {"type": "string", "minLength": 1},
+    "source_uri": {"type": ["string", "null"]},
+    "resolved_revision": {"type": "string", "minLength": 1},
+    "candidate_digest": {"$ref": "#/$defs/digest"},
+    "resolution_record_digest": {"$ref": "#/$defs/digest"},
+    "discovery_bundle_digest": {"$ref": "#/$defs/digest"},
+    "selection_id": {"type": "string", "minLength": 1},
+    "selection_rationale": {"type": "string", "minLength": 1},
+    "selection_record_digest": {"$ref": "#/$defs/digest"},
+    "inspection_id": {"type": "string", "minLength": 1},
+    "coverage_status": {"const": "FULL"},
+    "gate_verdict": {"const": "PASS"},
+    "managed_completion_receipt_digest": {"$ref": "#/$defs/digest"},
+    "engine_version": {"type": "string", "minLength": 1},
+    "plugin_version": {"type": "string", "minLength": 1},
+    "issued_at": {"type": "string", "minLength": 1},
+    "receipt_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {"digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+}

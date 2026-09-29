@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "result_id", "governance_status", "candidate_id", "candidate_digest", "discovery_bundle_digest", "selection_record_digest", "inspection_id", "coverage_status", "gate_verdict", "blocking_reasons", "receipt", "finalized_at", "result_digest"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "result_id": {"type": "string", "minLength": 1},
+    "governance_status": {"enum": ["APPROVED", "BLOCKED", "INCOMPLETE"]},
+    "candidate_id": {"type": "string", "minLength": 1},
+    "candidate_digest": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+    "discovery_bundle_digest": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+    "selection_record_digest": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+    "inspection_id": {"type": ["string", "null"]},
+    "coverage_status": {"enum": ["FULL", "PARTIAL", "COMPATIBILITY", null]},
+    "gate_verdict": {"enum": ["PASS", "FAIL", "INCOMPLETE", "ERROR", null]},
+    "blocking_reasons": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "receipt": {"anyOf": [{"$ref": "candidate-governance-receipt.schema.json"}, {"type": "null"}]},
+    "finalized_at": {"type": "string", "minLength": 1},
+    "result_digest": {"$ref": "#/$defs/digest"}
+  },
+  "allOf": [
+    {"if": {"properties": {"governance_status": {"const": "APPROVED"}}}, "then": {"properties": {"gate_verdict": {"const": "PASS"}, "coverage_status": {"const": "FULL"}, "receipt": {"$ref": "candidate-governance-receipt.schema.json"}}}},
+    {"if": {"properties": {"governance_status": {"enum": ["BLOCKED", "INCOMPLETE"]}}}, "then": {"properties": {"receipt": {"type": "null"}, "blocking_reasons": {"minItems": 1}}}}
+  ],
+  "$defs": {"digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+}
