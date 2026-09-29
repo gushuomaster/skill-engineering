@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "skill-engineering"
-version = "1.0.3"
+version = "1.1.0"
 requires-python = ">=3.11"
 dependencies = ["jsonschema>=4.23,<5", "mcp>=1,<2", "PyYAML>=6,<7"]
 

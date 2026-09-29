@@ -4,6 +4,7 @@ import re
 
 SKILL_ROOT = Path(__file__).resolve().parents[2] / "skills" / "skill-engineer"
 REFERENCE_NAMES = {
+    "discovery.md",
     "pipeline.md",
     "issue-classification.md",
     "mechanism-selection.md",
@@ -45,3 +46,11 @@ def test_skill_routes_production_engine_calls_through_bootstrap() -> None:
     assert "Never invoke `scripts/skill_engineering.py` directly" in body
     assert "BOOTSTRAP_ERROR" in body
     assert "`INCOMPLETE`" in body
+
+
+def test_skill_entry_preserves_discovery_install_boundary() -> None:
+    body = read_skill()
+
+    assert "references/discovery.md" in body
+    assert "auto_import=false" in body
+    assert "must stop before installation" in body

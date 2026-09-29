@@ -1,11 +1,11 @@
 ---
 name: skill-engineer
-description: Audit, diagnose, repair, and validate Codex Skills with Codex-led reasoning, isolated candidates, evidence-backed checks, and safe apply.
+description: Use when users need to discover, audit, diagnose, repair, or validate Codex Skills.
 ---
 
 # Skill Engineer
 
-Use this Skill when the user asks to audit a Skill, audit and repair it, or repair a specific evidenced problem. Codex owns intent, diagnosis, root-cause analysis, professional-Skill selection, repair decisions, semantic confirmation, and the final explanation. The Engine supplies inventory, read-only audit isolation, deterministic checks, evidence integrity, regression enforcement, and atomic safe apply. It does not decide what the user's problem means.
+Use this Skill when the user asks to find a Skill, audit a Skill, audit and repair it, or repair a specific evidenced problem. Codex owns intent, candidate selection, diagnosis, root-cause analysis, professional-Skill selection, repair decisions, semantic confirmation, and the final explanation. The Engine supplies discovery aggregation, inventory, read-only audit isolation, deterministic checks, evidence integrity, regression enforcement, and atomic safe apply. It does not decide what the user's problem means.
 
 Do not use this Skill for Marketplace publishing, Plugin release, distribution, installation, deployment, or release management.
 
@@ -14,6 +14,10 @@ Do not use this Skill for Marketplace publishing, Plugin release, distribution, 
 Run every production Engine command through `scripts/bootstrap_skill_engineering.py`, resolved from this installed plugin's root. The bootstrap uses only the Python standard library, provisions the locked runtime with uv outside the plugin and target workspace, and then launches `scripts/skill_engineering.py` inside that managed runtime. Never invoke `scripts/skill_engineering.py` directly with the current system Python.
 
 If bootstrap returns `BOOTSTRAP_ERROR`, do not fabricate an inspection, Gate, or receipt. Report the structured reason and treat the managed workflow as `INCOMPLETE` under the result boundary below.
+
+## Discover candidates
+
+When the user needs a Skill but has not named an exact local provider, read [discovery](references/discovery.md). OpenSpace searches require `auto_import=false`, and every remote candidate must stop before installation until Codex selection, quarantine resolution, inspection, the existing Quality Gate, and candidate finalization are complete.
 
 ## Choose one user mode
 
@@ -36,6 +40,7 @@ Do not expose older create/modify/fix/audit-optimize lifecycle labels as user mo
 9. Use `apply` only for a confirmed `PASS / READY_TO_APPLY` repair with a matching `ManagedCompletionReceipt` when modification was authorized. Safe apply preserves staging, digest checks, concurrent-source protection, backup, atomic replacement, and recovery.
 
 Read phase-specific details only when needed:
+[discovery](references/discovery.md),
 [pipeline](references/pipeline.md),
 [issue classification](references/issue-classification.md),
 [mechanism selection](references/mechanism-selection.md),
