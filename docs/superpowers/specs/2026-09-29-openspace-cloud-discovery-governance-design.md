@@ -27,16 +27,14 @@ User Query
 
 ## 2. 已确认的 OpenSpace Contract
 
-当前本机 OpenSpace 源码版本为 `0.1.0`，工作树提交为 `d1e367d`。已确认：
+当前生产探测使用 OpenSpace `2.0.0`。已确认：
 
-- MCP 暴露 `execute_task`、`search_skills`、`fix_skill`、`upload_skill`。
-- 不存在 `cloud_browse_skills`。
-- `search_skills(query, source, limit, auto_import)` 是正式 Discovery tool。
-- Cloud 查询使用 `source="cloud"`。
-- `auto_import` 默认值为 `true`，生产适配必须显式使用 `auto_import=false`。
-- 搜索结果至少可提供 `skill_id`、`name`、`description`、`source`、`score`，并可能带有 `visibility`、`created_by`、`origin`、`tags` 和安全信号。
+- `search_skills(query, limit)` 只搜索本地 Registry，不是 Cloud Discovery 入口。
+- `cloud_browse_skills(action="search_skills", query=..., limit=...)` 是正式 Cloud Discovery 入口。
+- 生产查询固定使用 `audience="requester_visible"` 和 `artifact_filter="downloadable_only"`，且不传递任何 import、download、target-directory 或 local-placement 参数。
+- 搜索结果至少可提供 `cloud_skill_id`、`title`、`summary`、`score`，并可能带有 `effective_visibility`、`manifest_hash`、`artifact_state`、`downloadable`、`metadata_only`、package 信息和排名信号。
 - 官方 `openspace-download-skill --skill-id <id> --output-dir <dir>` 可下载到指定目录。
-- 当前 Contract 没有明确声明 `skill_id` 是不可变 revision，也没有向搜索结果保证 content digest。
+- 当前 Contract 没有明确声明 `cloud_skill_id` 是不可变 revision，也没有证明 `manifest_hash` 等同于候选包的权威 content digest。
 
 因此本期不猜测内部 REST endpoint，不抓取网页，不把 `skill_id` 或 `latest/main` 自动当作不可变 revision。若无法取得 OpenSpace 对不可变性的证明，候选可以被发现和暂存，但必须以 `INCOMPLETE` 停止，不能签发 `APPROVED`。
 
@@ -54,13 +52,14 @@ User Query
 
 #### `OpenSpaceCloudSource`
 
-实现现有 `SkillSource`，职责仅限于调用 OpenSpace MCP `search_skills` 并把结果规范化为 `SkillCandidate`。它不下载、不安装、不执行、不生成治理结论。
+实现现有 `SkillSource`，职责仅限于调用 OpenSpace MCP `cloud_browse_skills` 的 `search_skills` 动作并把结果规范化为 `SkillCandidate`。它不下载、不安装、不执行、不生成治理结论。
 
 生产调用必须满足：
 
 ```text
-source="cloud"
-auto_import=false
+action="search_skills"
+audience="requester_visible"
+artifact_filter="downloadable_only"
 ```
 
 MCP 结果中的评分、作者、下载量、标签、安全标记等均保存为 discovery signals，不得转换为 Evidence 或 Gate 输入。
@@ -207,7 +206,7 @@ immutable proof missing / candidate changed
 必须保留并扩展现有完整回归测试，新增至少覆盖：
 
 1. Local-only query 返回 Candidate。
-2. Cloud-only query 通过 MCP adapter 返回 Candidate，且调用参数强制 `auto_import=false`。
+2. Cloud-only query 通过 MCP adapter 返回 Candidate，且调用参数固定为 search-only cloud browsing contract。
 3. Local + Cloud 聚合、排序输入和去重。
 4. 相同 repository/revision/digest 的不同来源合并且保留 provenance。
 5. 相同 name 但不同内容保持独立。
@@ -239,7 +238,7 @@ immutable proof missing / candidate changed
 
 - Discovery Mode 已进入生产 CLI；
 - Local + OpenSpace Cloud 搜索真实接入；
-- `auto_import=false` 和 quarantine 边界由代码强制；
+- search-only Cloud browsing contract 和 quarantine 边界由代码强制；
 - 远程候选不会绕过现有 Evidence、Coverage 或 Gate；
 - APPROVED Receipt 绑定具体 source、immutable revision、digest 和 inspection；
 - 任意失败都安全收敛为 BLOCKED/INCOMPLETE；

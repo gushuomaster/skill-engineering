@@ -1,5 +1,7 @@
 # OpenSpace Cloud Skill Discovery and Candidate Governance Implementation Plan
 
+> **Production contract correction (2026-09-29):** Live OpenSpace `2.0.0` separates local and cloud search. The implemented production adapter now calls `cloud_browse_skills` with `action="search_skills"`, `audience="requester_visible"`, and `artifact_filter="downloadable_only"`. Earlier `search_skills(source="cloud", auto_import=false)` examples below record the superseded planning assumption and are not the production contract.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a production Discovery Mode that searches local and OpenSpace Cloud Skills, lets Codex select a candidate with rationale, resolves remote content into quarantine, and issues an exact-candidate governance receipt only after the existing Quality Gate passes.
@@ -13,7 +15,7 @@
 ## Global Constraints
 
 - Preserve `SkillSource`, `LocalSkillSource`, `search_sources()`, `deduplicate_candidates()`, and `find_exact()`; no second discovery framework or Provider selector.
-- OpenSpace discovery calls only the official MCP `search_skills` tool with `source="cloud"` and `auto_import=false`.
+- OpenSpace discovery calls only the official MCP `cloud_browse_skills` tool with the fixed search-only action and downloadable-artifact filter.
 - Production code must not call guessed OpenSpace REST/GraphQL endpoints or scrape web pages.
 - Remote metadata and Codex selection rationale are discovery inputs, never Governance Evidence.
 - Remote content may only be written below the Engine-owned artifacts root and must never enter `%CODEX_HOME%\\skills`, Plugin Cache, or another registered Skill root.
@@ -306,12 +308,11 @@ class RecordingTransport:
         return self.rows
 
 
-def test_cloud_source_never_requests_auto_import():
+def test_cloud_source_uses_search_only_cloud_browsing():
     transport = RecordingTransport(({
-        "skill_id": "demo__clo_12345678",
-        "name": "demo",
-        "description": "Demo Skill",
-        "source": "cloud",
+        "cloud_skill_id": "demo__clo_12345678",
+        "title": "demo",
+        "summary": "Demo Skill",
         "score": 0.9,
     },))
     source = OpenSpaceCloudSource(transport)
@@ -326,10 +327,11 @@ The production transport test must assert the exact MCP arguments:
 
 ```python
 assert call.arguments == {
+    "action": "search_skills",
     "query": "demo",
-    "source": "cloud",
     "limit": 20,
-    "auto_import": False,
+    "audience": "requester_visible",
+    "artifact_filter": "downloadable_only",
 }
 ```
 
@@ -363,9 +365,9 @@ sources:
       - openspace-mcp
       - --transport
       - stdio
-    search_tool: search_skills
-    source_argument: cloud
-    auto_import: false
+    search_tool: cloud_browse_skills
+    search_action: search_skills
+    artifact_filter: downloadable_only
     download_command:
       - openspace-download-skill
 ```
@@ -397,11 +399,12 @@ class OpenSpaceMcpSearchTransport:
             async with ClientSession(reader, writer) as session:
                 await session.initialize()
                 result = await asyncio.wait_for(
-                    session.call_tool("search_skills", arguments={
+                        session.call_tool("cloud_browse_skills", arguments={
+                        "action": "search_skills",
                         "query": query,
-                        "source": "cloud",
                         "limit": limit,
-                        "auto_import": False,
+                        "audience": "requester_visible",
+                        "artifact_filter": "downloadable_only",
                     }),
                     timeout=self.timeout_seconds,
                 )
@@ -644,17 +647,19 @@ mcp = FastMCP("OpenSpaceFixture")
 
 
 @mcp.tool()
-async def search_skills(
-    query: str, source: str = "all", limit: int = 20, auto_import: bool = True,
+async def cloud_browse_skills(
+    action: str, query: str, limit: int = 20,
+    audience: str = "requester_visible", artifact_filter: str = "downloadable_only",
 ) -> str:
-    if source != "cloud" or auto_import:
+    if action != "search_skills" or audience != "requester_visible" or artifact_filter != "downloadable_only":
         return json.dumps({"error": "unsafe search arguments"})
     return json.dumps({
         "results": [{
-            "skill_id": "remote-valid__clo_12345678",
-            "name": "remote-valid",
-            "description": f"Fixture match for {query}",
-            "source": "cloud",
+            "cloud_skill_id": "remote-valid__clo_12345678",
+            "title": "remote-valid",
+            "summary": f"Fixture match for {query}",
+            "effective_visibility": "public",
+            "downloadable": True,
             "score": 0.99,
         }][:limit],
         "count": 1,
@@ -673,7 +678,7 @@ Expected: FAIL because the phase commands are not registered.
 
 - [ ] **Step 3: Implement strict source configuration and construction**
 
-`load_source_config()` accepts only a top-level `sources` list, rejects unknown source types, duplicate source types, non-boolean `enabled`/`auto_import`, an OpenSpace `auto_import` value other than `false`, a search tool other than `search_skills`, and empty command arrays. It returns frozen records and never accepts credentials or arbitrary environment mappings from YAML. `build_sources()` uses CLI command overrides only when explicitly provided; otherwise it uses the validated non-secret config.
+`load_source_config()` accepts only a top-level `sources` list, rejects unknown source types, duplicate source types, invalid search actions or artifact filters, and empty command arrays. It returns frozen records and never accepts credentials or arbitrary environment mappings from YAML. `build_sources()` uses CLI command overrides only when explicitly provided; otherwise it uses the validated non-secret config.
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -691,7 +696,7 @@ class SourceConfig:
 
 Run: `python -m pytest tests/unit/test_discovery_config.py -v`
 
-Expected: PASS for the checked-in config and rejection of `auto_import: true`, credentials, unknown keys, and duplicate sources.
+Expected: PASS for the checked-in config and rejection of import actions, credentials, unknown keys, and duplicate sources.
 
 - [ ] **Step 4: Add CLI arguments and source construction**
 
@@ -1325,7 +1330,7 @@ git commit -m "test: cover remote discovery governance flow"
 def test_skill_entry_preserves_discovery_install_boundary():
     text = (ROOT / "skills/skill-engineer/SKILL.md").read_text(encoding="utf-8")
     assert "references/discovery.md" in text
-    assert "auto_import=false" in text
+    assert "cloud_browse_skills" in text
     assert "must stop before installation" in text
 ```
 
@@ -1346,7 +1351,7 @@ skill-engineering governs candidates.
 Installer installs only explicitly authorized candidates.
 ```
 
-List the phase commands and state that OpenSpace search must use `auto_import=false`; no instruction may tell Codex to install or execute a discovered candidate.
+List the phase commands and state that OpenSpace search must use the fixed search-only `cloud_browse_skills` action; no instruction may tell Codex to install or execute a discovered candidate.
 
 - [ ] **Step 4: Bump versions consistently**
 

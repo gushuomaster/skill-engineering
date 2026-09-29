@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "selection_id", "discovery_bundle_digest", "selected_candidate_id", "selection_rationale", "selected_by", "selected_at", "selection_record_digest"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "selection_id": {"type": "string", "minLength": 1},
+    "discovery_bundle_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "selected_candidate_id": {"type": "string", "minLength": 1},
+    "selection_rationale": {"type": "string", "minLength": 1},
+    "selected_by": {"const": "CODEX"},
+    "selected_at": {"type": "string", "minLength": 1},
+    "selection_record_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

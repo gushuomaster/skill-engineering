@@ -21,6 +21,17 @@ from .skill_sources import (
     deduplicate_candidates,
     search_sources,
 )
+from .discovery_models import (
+    CandidateGovernanceReceipt,
+    CandidateGovernanceResult,
+    CandidateGovernanceStatus,
+    DiscoveryBundle,
+    ImmutabilityStatus,
+    ResolvedCandidate,
+    SelectionRecord,
+    SourceSearchReport,
+    SourceSearchStatus,
+)
 
 __all__ = [
     "CapabilityDecision",
@@ -40,4 +51,13 @@ __all__ = [
     "SkillSource",
     "deduplicate_candidates",
     "search_sources",
+    "CandidateGovernanceReceipt",
+    "CandidateGovernanceResult",
+    "CandidateGovernanceStatus",
+    "DiscoveryBundle",
+    "ImmutabilityStatus",
+    "ResolvedCandidate",
+    "SelectionRecord",
+    "SourceSearchReport",
+    "SourceSearchStatus",
 ]

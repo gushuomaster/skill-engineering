@@ -1,6 +1,6 @@
 {
   "name": "skill-engineering",
-  "version": "1.0.3+codex.20260927135118",
+  "version": "1.1.0+codex.20260929000000",
   "description": "Codex-led Skill audit, diagnosis, repair, validation, and safe apply.",
   "author": {
     "name": "Local developer"

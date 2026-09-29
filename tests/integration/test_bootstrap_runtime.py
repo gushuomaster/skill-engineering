@@ -37,7 +37,7 @@ def _bootstrap_module(path: Path | None = None):
 
 def _copy_plugin(destination: Path) -> Path:
     ignored = shutil.ignore_patterns(
-        ".git", ".superpowers", ".pytest_cache", "__pycache__", "*.egg-info"
+        ".git", ".superpowers", ".pytest_cache", ".venv", "__pycache__", "*.egg-info"
     )
     return Path(shutil.copytree(ROOT, destination, ignore=ignored))
 

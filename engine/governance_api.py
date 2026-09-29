@@ -11,6 +11,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Mapping
 
+from engine.version import package_version
+
 
 class GovernanceError(RuntimeError):
     """Raised when a governance request cannot be interpreted safely."""
@@ -147,7 +149,7 @@ class GovernanceEngine:
         mode: GovernanceMode | str = GovernanceMode.ENFORCED,
     ) -> None:
         self.engine_name = engine_name
-        self.engine_version = engine_version or _package_version()
+        self.engine_version = engine_version or package_version()
         self.engine_revision = (
             engine_revision
             or os.environ.get("SKILL_ENGINEERING_REVISION")
@@ -416,13 +418,6 @@ def _digest_path(path: Path) -> str:
 def _digest(value: Any) -> str:
     payload = json.dumps(value, sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _package_version() -> str:
-    try:
-        return importlib.metadata.version("skill-engineering")
-    except importlib.metadata.PackageNotFoundError:
-        return "1.0.3"
 
 
 def _package_revision() -> str:

@@ -38,3 +38,5 @@ def test_plugin_and_package_versions_match():
     package_version = package["project"]["version"]
     assert re.fullmatch(r"\d+\.\d+\.\d+(?:\+codex\.\d{14})?", plugin_version)
     assert plugin_version.partition("+")[0] == package_version
+    assert package_version == "1.1.0"
+    assert plugin_version == "1.1.0+codex.20260929000000"

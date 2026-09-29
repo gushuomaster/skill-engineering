@@ -1,0 +1,15 @@
+sources:
+  - source_type: local
+    enabled: true
+  - source_type: openspace-cloud
+    enabled: true
+    transport: mcp-stdio
+    command:
+      - openspace-mcp
+      - --transport
+      - stdio
+    search_tool: cloud_browse_skills
+    search_action: search_skills
+    artifact_filter: downloadable_only
+    download_command:
+      - openspace-download-skill
