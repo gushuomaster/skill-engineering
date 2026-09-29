@@ -25,7 +25,7 @@ class OpenSpaceSearchTransport(Protocol):
 
 
 class OpenSpaceMcpSearchTransport:
-    """Call the official OpenSpace `search_skills` MCP tool over stdio."""
+    """Call the official OpenSpace cloud browsing search action over stdio."""
 
     def __init__(self, command: Sequence[str], *, timeout_seconds: int = 30) -> None:
         if not command or any(not isinstance(part, str) or not part for part in command):
@@ -59,12 +59,13 @@ class OpenSpaceMcpSearchTransport:
                     await session.initialize()
                     result = await asyncio.wait_for(
                         session.call_tool(
-                            "search_skills",
+                            "cloud_browse_skills",
                             arguments={
+                                "action": "search_skills",
                                 "query": query,
-                                "source": "cloud",
                                 "limit": limit,
-                                "auto_import": False,
+                                "audience": "requester_visible",
+                                "artifact_filter": "downloadable_only",
                             },
                         ),
                         timeout=self.timeout_seconds,
@@ -168,14 +169,20 @@ class OpenSpaceCloudSource:
         return tuple(self._candidate(row) for row in self.transport.search(query, limit))
 
     def _candidate(self, row: Mapping[str, object]) -> SkillCandidate:
-        skill_id = _optional_text(row.get("skill_id"))
-        name = _optional_text(row.get("name"))
+        skill_id = _optional_text(row.get("cloud_skill_id")) or _optional_text(
+            row.get("skill_id")
+        )
+        name = _optional_text(row.get("title")) or _optional_text(row.get("name"))
         if skill_id is None or name is None:
-            raise DiscoverySourceError("OpenSpace result requires skill_id and name")
+            raise DiscoverySourceError(
+                "OpenSpace result requires cloud_skill_id/title or skill_id/name"
+            )
         source = _optional_text(row.get("source"))
         if source is not None and source != "cloud":
             raise DiscoverySourceError("OpenSpace Cloud search returned a non-cloud row")
-        description = _optional_text(row.get("description")) or ""
+        description = _optional_text(row.get("summary")) or _optional_text(
+            row.get("description")
+        ) or ""
         source_url = _optional_text(row.get("origin"))
         origin = SkillOrigin(
             source_type=self.source_type,
@@ -184,9 +191,19 @@ class OpenSpaceCloudSource:
             fetch_reference=skill_id,
             publisher=_optional_text(row.get("created_by")),
             revision=None,
-            trust_signals=_signals(row, ("visibility", "safety_flags")),
+            trust_signals=_signals(
+                row,
+                (
+                    "effective_visibility",
+                    "visibility",
+                    "artifact_state",
+                    "downloadable",
+                    "metadata_only",
+                    "safety_flags",
+                ),
+            ),
             popularity_signals=_signals(row, ("downloads",)),
-            quality_signals=_signals(row, ("score", "tags")),
+            quality_signals=_signals(row, ("score", "rank", "manifest_hash", "tags")),
         )
         candidate_hash = hashlib.sha256(skill_id.encode("utf-8")).hexdigest()
         return SkillCandidate(

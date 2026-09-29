@@ -20,14 +20,15 @@ Candidate finalization emits only `APPROVED`, `BLOCKED`, or `INCOMPLETE`. `APPRO
 
 ## C. OpenSpace MCP Contract
 
-The production adapter calls the official `search_skills` MCP tool with:
+The production adapter calls the official `cloud_browse_skills` MCP tool with:
 
-- `source="cloud"`
-- `auto_import=false`
+- `action="search_skills"`
+- `audience="requester_visible"`
+- `artifact_filter="downloadable_only"`
 - a positive result limit
 - the user's natural-language query
 
-The official downloader command is `openspace-download-skill --skill-id ... --output-dir ...`. The currently observed public contract does not provide an authoritative immutable revision or content digest. A downloaded candidate therefore remains `INCOMPLETE` unless the live service supplies new immutable proof.
+The search call contains no import, download, target-directory, or local-placement argument. The official downloader command remains `openspace-download-skill --skill-id ... --output-dir ...` in the separate resolution phase. The currently observed public contract does not prove that `cloud_skill_id` is an immutable revision or that `manifest_hash` is the authoritative content digest of the resolved candidate. A downloaded candidate therefore remains `INCOMPLETE` unless the live service supplies that proof.
 
 ## D. Architecture Changes
 
@@ -40,22 +41,22 @@ The official downloader command is `openspace-download-skill --skill-id ... --ou
 
 ## E. Security Boundary
 
-Discovery metadata is untrusted ranking input and never becomes formal Evidence or installation authority. Search uses `auto_import=false`. Resolution writes only below the Engine artifact root and rejects registered Skill roots, plugin cache roots, path escape, missing `SKILL.md`, identity mismatch, oversized content, and malformed downloader output.
+Discovery metadata is untrusted ranking input and never becomes formal Evidence or installation authority. Discovery uses only the fixed Cloud browsing search action. Resolution writes only below the Engine artifact root and rejects registered Skill roots, plugin cache roots, path escape, missing `SKILL.md`, identity mismatch, oversized content, and malformed downloader output.
 
 The governance phases do not install, execute, register, or promote discovered candidates. Installation remains a separate, explicitly authorized downstream responsibility.
 
 ## F. Test Results
 
-- Unit suite: `356 passed, 2 skipped` in 2.45 seconds.
-- Complete repository suite after dependency correction: `533 passed, 2 skipped` in 60.13 seconds.
-- Final quiet regression: `533 passed, 2 skipped` in 60.83 seconds.
+- Current complete repository suite: `533 passed, 2 skipped` in 69.18 seconds.
 - The two skips are Windows symlink tests skipped because the current process lacks symlink creation privilege (`WinError 1314`).
-- Focused remote governance/E2E suite: `10 passed`.
+- Current OpenSpace adapter/config/Skill contract suite: `16 passed`.
+- Current remote governance/E2E suite: `15 passed`.
+- OpenSpace MCP dependency compatibility and related core suites: `108 passed`.
 - Skill validator: `Skill is valid!` with exit code 0.
 - Plugin validator: passed with exit code 0.
 - `git diff --check`: no whitespace errors.
 
-The complete suite initially exposed that the wheel-packaging test invoked `python -m pip` without declaring `pip` in the `test` extra. `pip>=24,<27` was added to the test dependency contract and lockfile; the original failing test then passed, followed by the fresh complete-suite result above.
+TDD regression evidence covered both production-contract failures: the old `search_skills(source="cloud", auto_import=false)` call and the old `skill_id/name/description` response mapping failed before implementation, then passed after switching to the live OpenSpace `cloud_browse_skills` search contract. OpenSpace now declares `mcp>=1.0.0,<2.0.0` in both packaging inputs because its client transports still use the MCP 1.x API; the active runtime is MCP `1.30.0`, and `pip check` reports no broken requirements.
 
 ## G. E2E Evidence
 
@@ -65,23 +66,23 @@ Fixture-backed production-path tests covered:
 - Missing downloader, nonzero downloader exit, malformed JSON, missing `SKILL.md`, and quarantine path escape as structured `INCOMPLETE` results.
 - A complete OpenSpace candidate flow through discovery, Codex selection, quarantine resolution, real Engine inspection, and candidate finalization.
 
-The real production `discover` command was run through `scripts/bootstrap_skill_engineering.py` using the configured `openspace-mcp --transport stdio` command and a harmless document-workflow query. The process returned a valid Discovery Bundle with an `INCOMPLETE` OpenSpace source report and zero candidates. The non-secret blocker was:
+The real production `discover` command was rerun through `scripts/bootstrap_skill_engineering.py` using the configured `openspace-mcp --transport stdio` command and a harmless document-workflow query. The corrected call reached the live `cloud_browse_skills` implementation in approximately three seconds without starting the heavyweight local OpenSpace engine. It returned a valid Discovery Bundle with an `INCOMPLETE` OpenSpace source report and zero candidates. The non-secret blocker was:
 
-`OpenSpace MCP error: cannot import name 'McpError' from 'mcp.shared.exceptions'`
+`OpenSpace cloud is disabled. Set OPENSPACE_CLOUD_MODE=live to use cloud features.`
 
-No fixture result was substituted for this real probe.
+Safe configuration inspection confirmed `OPENSPACE_CLOUD_MODE=off` and no configured OpenSpace Cloud API key. No credential value was read or recorded, and no fixture result was substituted for this real probe.
 
 Before and after the real probe:
 
-- `%CODEX_HOME%\skills`: 504 files before and after; file lists equal; standard `digest_tree()` remained `a3f0551a74652dabde7b65d67ada6739a7ba429152b43892f6c57bebc4069d01`; link-safe snapshot digest also remained equal.
-- `%CODEX_HOME%\plugins\cache`: 1945 files before and after; file lists equal; link-safe snapshot digest remained `0a683df0ce8e82f7dc01ec7a46885e5fea28b2350fbf1259d52e40db95bbfa13`.
+- `%CODEX_HOME%\skills`: 504 files before and after; the relative-path, size, and last-write-time snapshot had zero differences.
+- `%CODEX_HOME%\plugins\cache`: 1945 files before and after; the relative-path, size, and last-write-time snapshot had zero differences.
 
 The plugin cache's standard `digest_tree()` was unavailable both before and after because a pre-existing `openai-bundled/chrome/latest` Windows reparse point is intentionally rejected by the inventory safety guard. A non-following, link-aware content snapshot was used for the equality proof; the reparse point was not traversed or modified.
 
 ## H. Remaining Blockers
 
-1. The installed real `openspace-mcp` runtime is incompatible with its installed Python `mcp` dependency and cannot currently execute `search_skills`.
-2. Even after that external runtime is repaired, the current OpenSpace response contract must provide authoritative immutable revision or content-digest evidence before a live candidate can reach an `APPROVED` governance receipt.
+1. A human must complete OpenSpace Cloud authentication and enable live mode before a real remote result can be retrieved. This external authorization is not inferred or fabricated by the discovery adapter.
+2. After authentication, the live response must still provide authoritative immutable revision or content-digest evidence before a candidate can reach an `APPROVED` governance receipt. `manifest_hash` remains a quality signal until that contract is proven.
 
 No credentials, authorization headers, tokens, or raw credential-bearing stderr were recorded in this report.
 
@@ -89,4 +90,4 @@ No credentials, authorization headers, tokens, or raw credential-bearing stderr 
 
 `NOT_READY`
 
-The local+remote discovery architecture, quarantine boundary, governance binding, CLI failure semantics, and no-installation guarantees are implemented and pass the repository Quality Gate. Real OpenSpace production readiness is not established because the live MCP runtime failed before returning candidates, and the confirmed public contract still lacks immutable revision/content proof required for approval.
+The local+remote discovery architecture, current OpenSpace Cloud MCP contract, quarantine boundary, governance binding, CLI failure semantics, and no-installation guarantees are implemented and pass the repository checks. The MCP runtime incompatibility is resolved, and the real call now reaches the Cloud configuration boundary. Production readiness remains unproven because this machine is not authenticated or enabled for OpenSpace Cloud and no live result has yet supplied immutable revision/content proof required for approval.

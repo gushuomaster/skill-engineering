@@ -20,8 +20,8 @@ _CLOUD_KEYS = frozenset({
     "transport",
     "command",
     "search_tool",
-    "source_argument",
-    "auto_import",
+    "search_action",
+    "artifact_filter",
     "download_command",
 })
 
@@ -33,8 +33,8 @@ class SourceDefinition:
     transport: str | None = None
     command: tuple[str, ...] = ()
     search_tool: str | None = None
-    source_argument: str | None = None
-    auto_import: bool | None = None
+    search_action: str | None = None
+    artifact_filter: str | None = None
     download_command: tuple[str, ...] = ()
 
 
@@ -92,20 +92,20 @@ def load_source_config(path: Path) -> SourceConfig:
             continue
         if row.get("transport") != "mcp-stdio":
             raise ValueError("OpenSpace transport must be mcp-stdio")
-        if row.get("search_tool") != "search_skills":
-            raise ValueError("OpenSpace search tool must be search_skills")
-        if row.get("source_argument") != "cloud":
-            raise ValueError("OpenSpace source argument must be cloud")
-        if row.get("auto_import") is not False:
-            raise ValueError("OpenSpace auto_import must be false")
+        if row.get("search_tool") != "cloud_browse_skills":
+            raise ValueError("OpenSpace search tool must be cloud_browse_skills")
+        if row.get("search_action") != "search_skills":
+            raise ValueError("OpenSpace search action must be search_skills")
+        if row.get("artifact_filter") != "downloadable_only":
+            raise ValueError("OpenSpace artifact filter must be downloadable_only")
         definitions.append(SourceDefinition(
             source_type=source_type,
             enabled=enabled,
             transport="mcp-stdio",
             command=_string_tuple(row.get("command"), "OpenSpace command"),
-            search_tool="search_skills",
-            source_argument="cloud",
-            auto_import=False,
+            search_tool="cloud_browse_skills",
+            search_action="search_skills",
+            artifact_filter="downloadable_only",
             download_command=_string_tuple(
                 row.get("download_command"), "OpenSpace download command"
             ),

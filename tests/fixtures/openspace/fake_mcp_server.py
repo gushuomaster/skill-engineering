@@ -9,19 +9,25 @@ mcp = FastMCP("OpenSpaceFixture")
 
 
 @mcp.tool()
-async def search_skills(
+async def cloud_browse_skills(
+    action: str,
     query: str,
-    source: str = "all",
     limit: int = 20,
-    auto_import: bool = True,
+    audience: str = "requester_visible",
+    artifact_filter: str = "downloadable_only",
 ) -> str:
-    if source != "cloud" or auto_import:
+    if (
+        action != "search_skills"
+        or audience != "requester_visible"
+        or artifact_filter != "downloadable_only"
+    ):
         return json.dumps({"error": "unsafe search arguments"})
     rows = [{
-        "skill_id": "remote-demo__clo_12345678",
-        "name": "remote-demo",
-        "description": f"Fixture match for {query}",
-        "source": "cloud",
+        "cloud_skill_id": "remote-demo__clo_12345678",
+        "title": "remote-demo",
+        "summary": f"Fixture match for {query}",
+        "effective_visibility": "public",
+        "downloadable": True,
         "score": 0.99,
     }]
     return json.dumps({"results": rows[:limit], "count": len(rows[:limit])})

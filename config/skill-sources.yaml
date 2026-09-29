@@ -8,8 +8,8 @@ sources:
       - openspace-mcp
       - --transport
       - stdio
-    search_tool: search_skills
-    source_argument: cloud
-    auto_import: false
+    search_tool: cloud_browse_skills
+    search_action: search_skills
+    artifact_filter: downloadable_only
     download_command:
       - openspace-download-skill

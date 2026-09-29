@@ -50,7 +50,13 @@ def test_skill_routes_production_engine_calls_through_bootstrap() -> None:
 
 def test_skill_entry_preserves_discovery_install_boundary() -> None:
     body = read_skill()
+    discovery = (SKILL_ROOT / "references" / "discovery.md").read_text(
+        encoding="utf-8"
+    )
 
     assert "references/discovery.md" in body
-    assert "auto_import=false" in body
     assert "must stop before installation" in body
+    assert "cloud_browse_skills" in discovery
+    assert 'action="search_skills"' in discovery
+    assert 'artifact_filter="downloadable_only"' in discovery
+    assert "import_skill" not in discovery.split("## Production phases", 1)[0]

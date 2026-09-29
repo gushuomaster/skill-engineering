@@ -17,7 +17,7 @@ If bootstrap returns `BOOTSTRAP_ERROR`, do not fabricate an inspection, Gate, or
 
 ## Discover candidates
 
-When the user needs a Skill but has not named an exact local provider, read [discovery](references/discovery.md). OpenSpace searches require `auto_import=false`, and every remote candidate must stop before installation until Codex selection, quarantine resolution, inspection, the existing Quality Gate, and candidate finalization are complete.
+When the user needs a Skill but has not named an exact local provider, read [discovery](references/discovery.md). OpenSpace discovery uses the cloud browsing tool's search-only action, and every remote candidate must stop before installation until Codex selection, quarantine resolution, inspection, the existing Quality Gate, and candidate finalization are complete.
 
 ## Choose one user mode
 

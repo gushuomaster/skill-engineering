@@ -11,7 +11,7 @@ Installer installs only explicitly authorized candidates.
 
 Discovery metadata is untrusted ranking input, not Evidence and not installation authority. A remote workflow must stop before installation. It must not execute, register, import, or write a candidate into `%CODEX_HOME%\skills`, `%CODEX_HOME%\plugins\cache`, or this plugin's packaged `skills/` directory.
 
-OpenSpace Cloud search must call `search_skills` with `source="cloud"` and `auto_import=false`. Source failure remains visible as an `INCOMPLETE` source report while other configured sources may still return candidates.
+OpenSpace Cloud discovery calls `cloud_browse_skills` with `action="search_skills"`, the user's query, a positive limit, `audience="requester_visible"`, and `artifact_filter="downloadable_only"`. This search-only call does not contain an import, download, target-directory, or local-placement argument. Source failure remains visible as an `INCOMPLETE` source report while other configured sources may still return candidates.
 
 ## Production phases
 

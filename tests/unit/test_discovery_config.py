@@ -18,15 +18,15 @@ def test_checked_in_source_config_is_non_secret_and_safe() -> None:
         "openspace-cloud",
     ]
     cloud = config.by_type("openspace-cloud")
-    assert cloud.auto_import is False
-    assert cloud.search_tool == "search_skills"
-    assert cloud.source_argument == "cloud"
+    assert cloud.search_tool == "cloud_browse_skills"
+    assert cloud.search_action == "search_skills"
+    assert cloud.artifact_filter == "downloadable_only"
 
 
 @pytest.mark.parametrize(
     "unsafe_yaml",
     (
-        "sources:\n  - source_type: openspace-cloud\n    enabled: true\n    auto_import: true\n",
+        "sources:\n  - source_type: openspace-cloud\n    enabled: true\n    search_action: import_skill\n",
         "sources:\n  - source_type: openspace-cloud\n    enabled: true\n    api_key: secret\n",
         "sources:\n  - source_type: unknown\n    enabled: true\n",
         "sources:\n  - source_type: local\n    enabled: true\n  - source_type: local\n    enabled: true\n",

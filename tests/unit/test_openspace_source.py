@@ -26,13 +26,12 @@ class RecordingTransport:
 
 def test_cloud_source_normalizes_metadata_without_claiming_evidence() -> None:
     transport = RecordingTransport(({
-        "skill_id": "demo__clo_12345678",
-        "name": "demo",
-        "description": "Demo Skill",
-        "source": "cloud",
+        "cloud_skill_id": "demo__clo_12345678",
+        "title": "demo",
+        "summary": "Demo Skill",
         "score": 0.9,
-        "visibility": "public",
-        "created_by": "publisher-a",
+        "effective_visibility": "public",
+        "manifest_hash": "manifest-hash-is-not-an-authoritative-content-digest",
     },))
     source = OpenSpaceCloudSource(
         transport,
@@ -46,7 +45,10 @@ def test_cloud_source_normalizes_metadata_without_claiming_evidence() -> None:
     assert candidate.origins[0].fetch_reference == "demo__clo_12345678"
     assert candidate.origins[0].revision is None
     assert candidate.content_digest is None
-    assert candidate.origins[0].quality_signals[0].name == "score"
+    assert {signal.name for signal in candidate.origins[0].quality_signals} == {
+        "score",
+        "manifest_hash",
+    }
     assert not hasattr(candidate, "evidence")
 
 
@@ -91,11 +93,12 @@ def test_mcp_transport_uses_safe_cloud_search_arguments(monkeypatch) -> None:
     )
 
     assert rows == ()
-    assert calls == [("search_skills", {
+    assert calls == [("cloud_browse_skills", {
+        "action": "search_skills",
         "query": "demo",
-        "source": "cloud",
         "limit": 20,
-        "auto_import": False,
+        "audience": "requester_visible",
+        "artifact_filter": "downloadable_only",
     })]
 
 
