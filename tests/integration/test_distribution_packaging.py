@@ -95,6 +95,14 @@ def test_installed_wheel_loads_default_gate_policy(tmp_path: Path) -> None:
             "-c",
             (
                 "from engine.quality_gate import load_gate_policy; "
+                "from engine import candidate_contract; "
+                "assert tuple(candidate_contract.__all__) == ("
+                "'digest_tree', 'completion_receipt', 'managed_status', "
+                "'validate_completion_receipt', 'CapabilityPreservationStatus', "
+                "'CoverageStatus', 'GateOutcome', 'GateVerdict', "
+                "'ManagedCompletionReceipt', 'PipelineOrchestrator', "
+                "'completion_receipt_from_data', 'confirmation_from_data', "
+                "'to_data', 'validation_from_data'); "
                 "print(load_gate_policy()['policy_version'])"
             ),
         ],
